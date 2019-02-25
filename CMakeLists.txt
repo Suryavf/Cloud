@@ -4,6 +4,10 @@ project (cloud)
 
 find_package(OpenGL REQUIRED)
 find_package(GLUT REQUIRED)
+find_package(PkgConfig REQUIRED)
+
+pkg_search_module(GLFW REQUIRED glfw3)
+include_directories(${GLFW_INCLUDE_DIRS})
 
 add_executable( cloud
                 main.cpp 
@@ -20,6 +24,9 @@ add_executable( cloud
                 vertexshader.glsl
                 fragmentshader.glsl
 )
+
+target_link_libraries(cloud ${GLFW_LIBRARIES})
+target_link_libraries(cloud ${GLFW_STATIC_LIBRARIES})
 
 include_directories( ${OPENGL_INCLUDE_DIRS}  ${GLUT_INCLUDE_DIRS} )
 target_link_libraries(cloud ${OPENGL_LIBRARIES} ${GLUT_LIBRARY} )
