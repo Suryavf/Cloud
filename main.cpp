@@ -9,6 +9,18 @@
 #include <GLFW/glfw3.h>
 GLFWwindow* window;
 
+// CUDA headers
+#include <cuda_runtime_api.h>
+#include <cuda_gl_interop.h>
+
+// Utilities and timing functions
+//#include <helper_functions.h>    // includes cuda.h and cuda_runtime_api.h
+//#include <timer.h>               // timing functions
+
+// CUDA helper functions
+//#include <helper_cuda.h>         // helper functions for CUDA error check
+//#include <helper_cuda_gl.h>      // helper functions for CUDA/GL interop
+
 // Include GLM
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -20,6 +32,9 @@ using namespace glm;
 #include "common/controls.hpp"
 
 int main(void){
+
+	// We have to call cudaGLSetGLDevice if we want to use OpenGL interoperability.
+    cudaGLSetGLDevice(0);
 
 /*    
  *  Initialise GLFW

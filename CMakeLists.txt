@@ -1,6 +1,6 @@
 # CMake entry point
 cmake_minimum_required (VERSION 3.0)
-project (cloud C CXX)
+project (cloud LANGUAGES C CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
@@ -27,24 +27,24 @@ if(${GLEW_FOUND})
     add_definitions(-DUSE_GLEW)
 endif()
 
+find_package(CUDA REQUIRED)
 
 # Main target build
 # -----------------
 
-add_executable( cloud
-                main.cpp 
-                common/shader.cpp
-                common/shader.hpp
-                common/controls.cpp
-                common/controls.hpp
-                common/texture.cpp
-                common/texture.hpp
-                common/objloader.cpp
-                common/objloader.hpp
-
-                vertexshader.glsl
-                fragmentshader.glsl
-)
+cuda_add_executable( cloud
+                     main.cpp 
+                     common/shader.cpp
+                     common/shader.hpp
+                     common/controls.cpp
+                     common/controls.hpp
+                     common/texture.cpp
+                     common/texture.hpp
+                     common/objloader.cpp
+                     common/objloader.hpp
+                     #vertexshader.glsl
+                     #fragmentshader.glsl
+                     )
 
 
 if(CMAKE_COMPILER_IS_GNUCXX)
@@ -66,9 +66,10 @@ include_directories("./common"
                     ${GLFW_INCLUDE_DIRS}
                     ${OPENGL_INCLUDE_DIRS}
                     ${GLEW_INCLUDE_DIRS}
-                    ${GLUT_INCLUDE_DIRS})
+                    ${GLUT_INCLUDE_DIRS}
+                    ${CUDA_INCLUDE_DIRS})
 
-                    
+
 target_link_libraries(cloud 
                      ${GLFW_STATIC_LIBRARIES}
                      ${OPENGL_LIBRARIES}
