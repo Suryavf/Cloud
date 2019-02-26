@@ -15,9 +15,9 @@ GLFWwindow* window;
 using namespace glm;
 
 // Include Common
-#include <common/shader.hpp>
-#include <common/texture.hpp>
-#include <common/controls.hpp>
+#include "common/shader.hpp"
+#include "common/texture.hpp"
+#include "common/controls.hpp"
 
 int main(void){
 
