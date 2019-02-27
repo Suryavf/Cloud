@@ -13,14 +13,6 @@ GLFWwindow* window;
 #include <cuda_runtime_api.h>
 #include <cuda_gl_interop.h>
 
-// Utilities and timing functions
-//#include <helper_functions.h>    // includes cuda.h and cuda_runtime_api.h
-//#include <timer.h>               // timing functions
-
-// CUDA helper functions
-//#include <helper_cuda.h>         // helper functions for CUDA error check
-//#include <helper_cuda_gl.h>      // helper functions for CUDA/GL interop
-
 // Include GLM
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -90,5 +82,151 @@ int main(void){
 	// Accept fragment if it closer to the camera than the former one
 	glDepthFunc(GL_LESS); 
 
-    
+/*    
+ *  VAO: Vertex Array Object
+ *  ========================
+ */
+	GLuint VAO;
+	glGenVertexArrays(1,&VAO);
+	glBindVertexArray(VAO);
+
+
+/*    
+ *  Load shaders: vertex and fragment
+ *  =================================
+ */
+	// Create and compile our GLSL program from the shaders
+	GLuint programID = LoadShaders(   "vertexshader.glsl", 
+	                                "fragmentshader.glsl");
+
+
+/*    
+ *  MVP: Modelo Vista Proyección
+ *  ============================
+ */
+	// Get a handle for our "MVP" uniform
+	GLuint MatrixID = glGetUniformLocation(programID, "MVP");
+
+	// Projection matrix : 45� Field of View, 4:3 ratio, display range : 0.1 unit <-> 100 units
+	glm::mat4 Projection = glm::perspective(glm::radians(45.0f), 4.0f / 3.0f, 0.1f, 100.0f);
+	
+	// Camera matrix
+	glm::mat4 View       = glm::lookAt(
+								glm::vec3(4,3,3), // Camera is at (4,3,3), in World Space
+								glm::vec3(0,0,0), // and looks at the origin
+								glm::vec3(0,1,0)  // Head is up (set to 0,-1,0 to look upside-down)
+						   );
+	// Model matrix : an identity matrix (model will be at the origin)
+	glm::mat4 Model      = glm::mat4(1.0f);
+
+	// Our ModelViewProjection : multiplication of our 3 matrices
+	glm::mat4 MVP        = Projection * View * Model; // Remember, matrix multiplication is the other way around
+
+/*    
+ *  Create Sphere. 3D vertex
+ *  ========================
+ */
+	Sphere sphr = Sphere();
+	GLfloat *gVertexBufferSphere = sphr.getVertices(); 
+
+	GLfloat *gColorBufferData = new GLfloat[ sphr.getVertexCount()*3 ];
+	for(size_t i=0; i<sphr.getVertexCount()*3; ++i)
+		gColorBufferData[i] = 0.5f;
+
+/*    
+ *  Buffer to OpenGL
+ *  ================
+ */
+	GLuint vertexbuffer;
+	glGenBuffers(1, &vertexbuffer);
+	glBindBuffer(GL_ARRAY_BUFFER, vertexbuffer);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(gVertexBufferSphere), gVertexBufferSphere, GL_STATIC_DRAW);
+
+	GLuint colorbuffer;
+	glGenBuffers(1, &colorbuffer);
+	glBindBuffer(GL_ARRAY_BUFFER, colorbuffer);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(gColorBufferData), gColorBufferData, GL_STATIC_DRAW);
+
+/*    
+ *  OpenGL Loop!
+ *  ============
+ */
+	do{
+	  /*
+	   .Basic operations
+	    ****************/
+
+		// Clear the screen
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+		// Use our shader
+		glUseProgram(programID);
+
+
+	  /*
+	   .MVP: Modelo Vista Proyección
+		****************************/
+
+		// Compute the MVP matrix from keyboard and mouse input
+		computeMatricesFromInputs();
+		glm::mat4 ProjectionMatrix = getProjectionMatrix();
+		glm::mat4 ViewMatrix = getViewMatrix();
+		glm::mat4 ModelMatrix = glm::mat4(1.0);
+		glm::mat4 MVP = ProjectionMatrix * ViewMatrix * ModelMatrix;
+
+		// Send our transformation to the currently bound shader, 
+		// in the "MVP" uniform
+		glUniformMatrix4fv(MatrixID, 1, GL_FALSE, &MVP[0][0]);
+
+	  /*
+	   .Draw mesh
+		*********/
+	
+		// 1rst attribute buffer : vertices
+		glEnableVertexAttribArray(0);
+		glBindBuffer(GL_ARRAY_BUFFER, vertexbuffer);
+		glVertexAttribPointer(
+			0,                  // attribute. No particular reason for 0, but must match the layout in the shader.
+			3,                  // size
+			GL_FLOAT,           // type
+			GL_FALSE,           // normalized?
+			0,                  // stride
+			(void*)0            // array buffer offset
+		);
+
+		// 2nd attribute buffer : UVs
+		glEnableVertexAttribArray(1);
+		glBindBuffer(GL_ARRAY_BUFFER, colorbuffer);
+		glVertexAttribPointer(
+			1,                                // attribute. No particular reason for 1, but must match the layout in the shader.
+			3,                                // size : U+V => 2
+			GL_FLOAT,                         // type
+			GL_FALSE,                         // normalized?
+			0,                                // stride
+			(void*)0                          // array buffer offset
+		);
+
+		// Draw the triangle !
+		glDrawArrays(GL_TRIANGLES, 0, sphr.getVertexCount()*3); // 12*3 indices starting at 0 -> 12 triangles
+
+
+
+
+	while( glfwGetKey(window, GLFW_KEY_ESCAPE ) != GLFW_PRESS &&
+		   glfwWindowShouldClose(window) == 0 );
+
+
+/*    
+ *  Cleanup VBO and shader
+ *  ======================
+ */
+	glDeleteBuffers(1, &vertexbuffer);
+	glDeleteBuffers(1, & colorbuffer);
+	glDeleteProgram(programID);
+	glDeleteVertexArrays(1, &VAO);
+
+	// Close OpenGL window and terminate GLFW
+	glfwTerminate();
+
+	return 0;
 }
