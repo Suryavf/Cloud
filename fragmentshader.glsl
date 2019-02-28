@@ -56,11 +56,11 @@ float fbm (in vec2 st) {
 }
 
 void main() {
-    //vec2 st = gl_FragCoord.xy/(1024.0f*768.0f);//u_resolution.xy;
-    //st.x *= 1024.0f/768.0f;//u_resolution.x/u_resolution.y;
+    vec2 st = gl_FragCoord.xy/vec2(1024.0,768.0);//u_resolution.xy;
+    st.x *= 1024.0f/768.0f;//u_resolution.x/u_resolution.y;
 
     vec3 rawcolor = vec3(0.0);
-	rawcolor += fbm(vec2(0.9,0.75)*3.0);
+	rawcolor += fbm(st*5.0);
 
     //gl_FragColor = vec4(color,1.0);
 	color = rawcolor;//rawcolor;

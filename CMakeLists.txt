@@ -34,6 +34,8 @@ find_package(CUDA REQUIRED)
 
 cuda_add_executable( cloud
                      main.cpp 
+                     sphere.cpp
+                     sphere.h
                      common/shader.cpp
                      common/shader.hpp
                      common/controls.cpp
