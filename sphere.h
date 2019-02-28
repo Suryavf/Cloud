@@ -1,5 +1,5 @@
-#ifndef _SPHERE_H_
-#define _SPHERE_H_
+#ifndef SPHERE_H
+#define SPHERE_H
 
 #include <vector>
 
@@ -37,6 +37,19 @@ public:
     const float* getTexCoords() const       { return texCoords.data(); }
     const unsigned int* getIndices() const  { return indices.data(); }
     const unsigned int* getLineIndices() const  { return lineIndices.data(); }
+
+    const float* getGLvertices     () const { return glVertices.data(); }
+    const float* getGLnormals      () const { return glNormals .data(); }
+    const float* getGLcoordinates  () const { return glCoords  .data(); }
+
+    unsigned int getGLVertexCount() const { return glVertices.size(); }
+    unsigned int getGLVertexSize () const { return glVertices.size() * sizeof(float); }
+
+    unsigned int getGLnormalCount() const { return glNormals.size(); }
+    unsigned int getGLnormalSize () const { return glNormals.size() * sizeof(float); }
+
+    unsigned int getGLcoordinateCount() const { return glCoords.size(); }
+    unsigned int getGLcoordinateSize () const { return glCoords.size() * sizeof(float); }
 
     // for interleaved vertices: V/N/T
     unsigned int getInterleavedVertexCount() const  { return getVertexCount(); }    // # of vertices
@@ -80,10 +93,15 @@ private:
     std::vector<unsigned int> indices;
     std::vector<unsigned int> lineIndices;
 
+    // OpenGL
+    std::vector<float> glVertices;
+    std::vector<float> glNormals ;
+    std::vector<float> glCoords  ;
+
     // interleaved
     std::vector<float> interleavedVertices;
     int interleavedStride;                  // # of bytes to hop to the next vertex (should be 32 bytes)
 
 };
 
-#endif  // #ifndef _SPHERE_H_
+#endif

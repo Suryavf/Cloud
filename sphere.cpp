@@ -237,6 +237,7 @@ void Sphere::buildVerticesSmooth()
     float stackStep = PI / stackCount;
     float sectorAngle, stackAngle;
 
+    std::vector<unsigned int> coordinates;
     for(int i = 0; i <= stackCount; ++i)
     {
         stackAngle = PI / 2 - i * stackStep;        // starting from pi/2 to -pi/2
@@ -253,6 +254,8 @@ void Sphere::buildVerticesSmooth()
             x = xy * cosf(sectorAngle);             // r * cos(u) * cos(v)
             y = xy * sinf(sectorAngle);             // r * cos(u) * sin(v)
             addVertex(x, y, z);
+            coordinates.push_back(i);
+            coordinates.push_back(j);
 
             // normalized vertex normal
             nx = x * lengthInv;
@@ -279,16 +282,22 @@ void Sphere::buildVerticesSmooth()
         k2 = k1 + sectorCount + 1;      // beginning of next stack
 
         for(int j = 0; j < sectorCount; ++j, ++k1, ++k2)
-        {
+        {   
+            
+
             // 2 triangles per sector excluding 1st and last stacks
             if(i != 0)
             {
                 addIndices(k1, k2, k1+1);   // k1---k2---k1+1
+                //coordinates.push_back(i);
+                //coordinates.push_back(j);
             }
 
             if(i != (stackCount-1))
             {
                 addIndices(k1+1, k2, k2+1); // k1+1---k2---k2+1
+                //coordinates.push_back(i);
+                //coordinates.push_back(j);
             }
 
             // vertical lines for all stacks
@@ -301,9 +310,39 @@ void Sphere::buildVerticesSmooth()
             }
         }
     }
+    std::cout << "Indices: " << indices.size() << std::endl;
+    std::cout << "Vertices: " << vertices.size() << std::endl;
+    std::cout << "Normals: " << normals.size() << std::endl;
+
+    unsigned int id;
+    unsigned int idx,idy,idz;
+    unsigned int ida,idb;
+    for(int i = 0; i < indices.size(); ++i){
+        id = indices[i];
+        idx = id*3;
+        idy = id*3 + 1;
+        idz = id*3 + 2;
+
+        ida = id*2;
+        idb = id*2 + 1;
+
+        // Save vertices
+        glVertices.push_back( vertices[idx] );
+        glVertices.push_back( vertices[idy] );
+        glVertices.push_back( vertices[idz] );
+
+        // Save normals
+        glNormals.push_back( normals[idx] );
+        glNormals.push_back( normals[idy] );
+        glNormals.push_back( normals[idz] );
+
+        // Save coordinates
+        glCoords.push_back( float(coordinates[ida]) );
+        glCoords.push_back( float(coordinates[idb]) );
+    }
 
     // generate interleaved vertex array as well
-    buildInterleavedVertices();
+    //buildInterleavedVertices();
 }
 
 
@@ -487,7 +526,7 @@ void Sphere::buildInterleavedVertices()
     std::size_t i, j;
     std::size_t count = vertices.size();
     for(i = 0, j = 0; i < count; i += 3, j += 2)
-    {
+    {   
         interleavedVertices.push_back(vertices[i]);
         interleavedVertices.push_back(vertices[i+1]);
         interleavedVertices.push_back(vertices[i+2]);
@@ -500,7 +539,6 @@ void Sphere::buildInterleavedVertices()
         interleavedVertices.push_back(texCoords[j+1]);
     }
 }
-
 
 
 ///////////////////////////////////////////////////////////////////////////////
