@@ -40,7 +40,9 @@ public:
 
     const float* getGLvertices     () const { return glVertices.data(); }
     const float* getGLnormals      () const { return glNormals .data(); }
-    const float* getGLcoordinates  () const { return glCoords  .data(); }
+    const float* getGLcoordinates  () const { //for(int i=0; i<glCoords.size();i+=2)
+                                              //  std::cout << "(" << glCoords[i] << "," << glCoords[i+1] << ")" << std::endl;
+                                              return glCoords  .data(); }
 
     unsigned int getGLVertexCount() const { return glVertices.size(); }
     unsigned int getGLVertexSize () const { return glVertices.size() * sizeof(float); }

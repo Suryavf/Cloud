@@ -2,29 +2,22 @@
 
 // Interpolated values from the vertex shaders
 in vec3 fragmentColor;
+in vec2 fragmentCoordinate;
 
 // Ouput data
 out vec3 color;
-/*
-void main(){
 
-	// Output color = color specified in the vertex shader, 
-	// interpolated between all 3 surrounding vertices
-	color = fragmentColor;
-
-}*/
-
-float random (in vec2 st) {
-    return fract(sin(dot(st.xy,
+float random (in vec2 _st) {
+    return fract(sin(dot(_st.xy,
                          vec2(12.9898,78.233)))*
         43758.5453123);
 }
 
 // Based on Morgan McGuire @morgan3d
 // https://www.shadertoy.com/view/4dS3Wd
-float noise (in vec2 st) {
-    vec2 i = floor(st);
-    vec2 f = fract(st);
+float noise (in vec2 _st) {
+    vec2 i = floor(_st);
+    vec2 f = fract(_st);
 
     // Four corners in 2D of a tile
     float a = random(i);
@@ -39,29 +32,37 @@ float noise (in vec2 st) {
             (d - b) * u.x * u.y;
 }
 
-#define OCTAVES 6
-float fbm (in vec2 st) {
-    // Initial values
-    float value = 0.0;
-    float amplitude = .5;
-    float frequency = 0.;
-    //
-    // Loop of octaves
-    for (int i = 0; i < OCTAVES; i++) {
-        value += amplitude * noise(st);
-        st *= 2.;
-        amplitude *= .5;
+#define NUM_OCTAVES 10
+
+float fbm ( in vec2 _st) {
+    float v = 0.0;
+    float a = 0.5;
+    vec2 shift = vec2(100);
+    // Rotate to reduce axial bias
+
+    mat2 rot = mat2( cos(0.5), sin(0.5),
+                    -sin(0.5), cos(0.5));
+    for (int i = 0; i < NUM_OCTAVES; ++i) {
+        v += a * noise(_st);
+        _st = rot * _st * 2.0 + shift;
+        a *= 0.5;
     }
-    return value;
+    return v;
 }
 
 void main() {
-    vec2 st = gl_FragCoord.xy/vec2(1024.0,768.0);//u_resolution.xy;
+    vec2 st = gl_FragCoord.xy/vec2(1024.0,768.0);
+	//vec2 st = gl_FragCoord.xy/vec2(1024.0,768.0);//u_resolution.xy;
     st.x *= 1024.0f/768.0f;//u_resolution.x/u_resolution.y;
 
-    vec3 rawcolor = vec3(0.0);
-	rawcolor += fbm(st*5.0);
 
+	//fragmentCoordinate.x = fragmentCoordinate.x/36.0;
+	//fragmentCoordinate.y = fragmentCoordinate.y/36.0;
+	vec2 coord = fragmentCoordinate /50.0;
+
+    vec3 rawcolor = vec3(0.0);
+	rawcolor += fbm(coord*5.0);
+	
     //gl_FragColor = vec4(color,1.0);
-	color = rawcolor;//rawcolor;
+	color =rawcolor;// vec3(0.5, 0.0 ,0.0 );//rawcolor;//rawcolor;
 }
