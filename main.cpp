@@ -157,15 +157,30 @@ int main(void){
 	// Texture optical depth
 	glGenTextures(1, &texOpticalDepthID);
 	glBindTexture(GL_TEXTURE_3D, texOpticalDepthID);
-	{
+	{	
+	/*
+		El parámetro GL_NEAREST especifica que no debe producirse ningún filtrado; simplemente 
+		devuelva el píxel cerrado a la coordenada de textura solicitada.
+	 */
+
 		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST        );
 		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST        );
 		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S,     GL_CLAMP_TO_BORDER);
 		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_BORDER);
 		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_BORDER);
+	/*
+	  	Dado que las coordenadas de la textura generalmente se definen en el rango [0..1), 
+		el acceso a un píxel fuera de este rango generalmente resultará en un error (como 
+		intentar acceder a una matriz fuera de los límites) pero la configuración GL_CLAMP_TO_EDGE 
+		nos permite solicitar un píxel de la textura fuera del rango normalizado sin acceder 
+		a la memoria fuera de los límites. Las coordenadas de la textura simplemente se fijarán 
+		en el rango permitido cuando se acceda a la textura.
+	 */
 
+		// Allocate memory for the texture
 		glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA32F, texOpticalDepthDim.x, texOpticalDepthDim.y, texOpticalDepthDim.z, 0, GL_RGBA, GL_FLOAT, NULL);
 	}
+	// Unbind the texture
 	glBindTexture(GL_TEXTURE_3D, 0);
 
 	// Texture scattering
@@ -178,9 +193,11 @@ int main(void){
 		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_BORDER);
 		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_BORDER);
 
+		// Allocate memory for the texture
 		glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA32F, texScatteringDim.x, texScatteringDim.y, texScatteringDim.z, 0, GL_RGBA, GL_FLOAT, NULL);
 	}
-	glBindTexture(GL_TEXTURE_3D, 1);
+	// Unbind the texture
+	glBindTexture(GL_TEXTURE_3D, 0);
 
 
 /*    
@@ -191,24 +208,36 @@ int main(void){
 	cudaGraphicsGLRegisterImage(&cudaOpticalDepthResource, texOpticalDepthID, GL_TEXTURE_3D, 
 	                             cudaGraphicsRegisterFlagsSurfaceLoadStore); // Register Image (texture) to CUDA Resource
 	cudaGraphicsMapResources(1, &cudaOpticalDepthResource, 0); // Map CUDA resource
-	{
-		//Get mapped array
-		cudaGraphicsSubResourceGetMappedArray(&cudaOpticalDepthArray, cudaOpticalDepthResource, 0, 0);
-		launch_kernel(cudaOpticalDepthArray, texOpticalDepthDim);
-	}
-	cudaGraphicsUnmapResources(1, &cudaOpticalDepthResource, 0)
-
+	
 	// Scattering
 	cudaGraphicsGLRegisterImage(&cudaScatteringResource, texScatteringID, GL_TEXTURE_3D, 
 	                             cudaGraphicsRegisterFlagsSurfaceLoadStore); // Register Image (texture) to CUDA Resource
 	cudaGraphicsMapResources(1, &cudaScatteringResource, 0); // Map CUDA resource
-	{
-		//Get mapped array
-		cudaGraphicsSubResourceGetMappedArray(&cudaScatteringArray, cudaScatteringResource, 0, 0);
-		launch_kernel(cudaScatteringArray, texScatteringDim);
-	}
-	cudaGraphicsUnmapResources(1, &cudaScatteringResource, 0)
 
+/*    
+ *  CUDA execution
+ *  ==============
+ */
+	// Get Optical Depth 
+	cudaGraphicsSubResourceGetMappedArray(&cudaOpticalDepthArray, cudaOpticalDepthResource, 0, 0); //Get mapped array
+	//launch_kernel(cudaOpticalDepthArray, texOpticalDepthDim);
+	
+	
+	// Get Scattering
+	cudaGraphicsSubResourceGetMappedArray(&cudaScatteringArray, cudaScatteringResource, 0, 0); //Get mapped array
+	//launch_kernel(cudaScatteringArray, texScatteringDim);
+	
+
+/*    
+ *  OpenGL-CUDA disconnection
+ *  =========================
+ */
+	cudaGraphicsUnmapResources(1, &cudaOpticalDepthResource, 0);
+	cudaGraphicsUnregisterResource(cudaOpticalDepthResource);
+
+	cudaGraphicsUnmapResources(1, &cudaScatteringResource, 0);
+	cudaGraphicsUnregisterResource(cudaScatteringResource);
+	
 
 /*    
  *  OpenGL Loop!
@@ -303,6 +332,11 @@ int main(void){
 	glDeleteBuffers(1, &coordinatesbuffer);
 	glDeleteProgram(programID);
 	glDeleteVertexArrays(1, &VAO);
+
+	glDeleteTextures(1, &texOpticalDepthID);
+	glDeleteTextures(1, &texScatteringID);
+
+	cudaDeviceReset();
 
 	// Close OpenGL window and terminate GLFW
 	glfwTerminate();
