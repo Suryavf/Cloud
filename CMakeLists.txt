@@ -33,9 +33,17 @@ find_package(CUDA REQUIRED)
 # -----------------
 
 cuda_add_executable( cloud
+                     
+                   # OpenGL functions
                      main.cpp 
                      sphere.cpp
                      sphere.h
+                   
+                   # CUDA functions
+                     lightTransport.h
+                     lightTransport.cu
+
+                   # Common functions 
                      common/shader.cpp
                      common/shader.hpp
                      common/controls.cpp
@@ -44,8 +52,6 @@ cuda_add_executable( cloud
                      common/texture.hpp
                      common/objloader.cpp
                      common/objloader.hpp
-                     #vertexshader.glsl
-                     #fragmentshader.glsl
                      )
 
 
