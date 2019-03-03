@@ -25,10 +25,18 @@ using namespace glm;
 #include "common/controls.hpp"
 #include "sphere.h"
 
-int main(void){
+// Textures 
+GLuint texOpticalDepthID;
+cudaGraphicsResource *cudaOpticalDepthResource;
+cudaArray            *cudaOpticalDepthArray   ;
+dim3 texOpticalDepthDim(32, 16, 32*16);
 
-	// We have to call cudaGLSetGLDevice if we want to use OpenGL interoperability.
-    cudaGLSetGLDevice(0);
+GLuint   texScatteringID;
+cudaGraphicsResource *cudaScatteringResource;
+cudaArray            *cudaScatteringArray   ;
+dim3 texScatteringDim(32, 64, 16);
+
+int main(void){
 
 /*    
  *  Initialise GLFW
@@ -85,13 +93,20 @@ int main(void){
 	glDepthFunc(GL_LESS); 
 
 /*    
+ *  Basic Setting CUDA
+ *  ==================
+ */
+	int device = 0;
+	cudaSetDevice    ( device );
+	cudaGLSetGLDevice( device ); // We have to call cudaGLSetGLDevice if we want to use OpenGL interoperability.
+
+/*    
  *  VAO: Vertex Array Object
  *  ========================
  */
 	GLuint VAO;
 	glGenVertexArrays(1,&VAO);
 	glBindVertexArray(VAO);
-
 
 /*    
  *  Load shaders: vertex and fragment
@@ -134,6 +149,67 @@ int main(void){
 	glBindBuffer(GL_ARRAY_BUFFER, coordinatesbuffer);
 	glBufferData(GL_ARRAY_BUFFER, sphr.getGLcoordinateSize(), sphr.getGLcoordinates(), GL_STATIC_DRAW);
 
+
+/*    
+ *  Create textures
+ *  ===============
+ */
+	// Texture optical depth
+	glGenTextures(1, &texOpticalDepthID);
+	glBindTexture(GL_TEXTURE_3D, texOpticalDepthID);
+	{
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST        );
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST        );
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S,     GL_CLAMP_TO_BORDER);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_BORDER);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_BORDER);
+
+		glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA32F, texOpticalDepthDim.x, texOpticalDepthDim.y, texOpticalDepthDim.z, 0, GL_RGBA, GL_FLOAT, NULL);
+	}
+	glBindTexture(GL_TEXTURE_3D, 0);
+
+	// Texture scattering
+	glGenTextures(1, &texScatteringID);
+	glBindTexture(GL_TEXTURE_3D, texScatteringID);
+	{
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST        );
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST        );
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S,     GL_CLAMP_TO_BORDER);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_BORDER);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T,     GL_CLAMP_TO_BORDER);
+
+		glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA32F, texScatteringDim.x, texScatteringDim.y, texScatteringDim.z, 0, GL_RGBA, GL_FLOAT, NULL);
+	}
+	glBindTexture(GL_TEXTURE_3D, 1);
+
+
+/*    
+ *  OpenGL-CUDA connection
+ *  ======================
+ */
+	// Optical Depth
+	cudaGraphicsGLRegisterImage(&cudaOpticalDepthResource, texOpticalDepthID, GL_TEXTURE_3D, 
+	                             cudaGraphicsRegisterFlagsSurfaceLoadStore); // Register Image (texture) to CUDA Resource
+	cudaGraphicsMapResources(1, &cudaOpticalDepthResource, 0); // Map CUDA resource
+	{
+		//Get mapped array
+		cudaGraphicsSubResourceGetMappedArray(&cudaOpticalDepthArray, cudaOpticalDepthResource, 0, 0);
+		launch_kernel(cudaOpticalDepthArray, texOpticalDepthDim);
+	}
+	cudaGraphicsUnmapResources(1, &cudaOpticalDepthResource, 0)
+
+	// Scattering
+	cudaGraphicsGLRegisterImage(&cudaScatteringResource, texScatteringID, GL_TEXTURE_3D, 
+	                             cudaGraphicsRegisterFlagsSurfaceLoadStore); // Register Image (texture) to CUDA Resource
+	cudaGraphicsMapResources(1, &cudaScatteringResource, 0); // Map CUDA resource
+	{
+		//Get mapped array
+		cudaGraphicsSubResourceGetMappedArray(&cudaScatteringArray, cudaScatteringResource, 0, 0);
+		launch_kernel(cudaScatteringArray, texScatteringDim);
+	}
+	cudaGraphicsUnmapResources(1, &cudaScatteringResource, 0)
+
+
 /*    
  *  OpenGL Loop!
  *  ============
@@ -142,7 +218,6 @@ int main(void){
 	  /*
 	   °Basic operations
 	    ****************/
-
 		// Clear the screen
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -153,7 +228,6 @@ int main(void){
 	  /*
 	   °MVP: Modelo Vista Proyección
 		****************************/
-
 		// Compute the MVP matrix from keyboard and mouse input
 		computeMatricesFromInputs();
 		glm::mat4 ProjectionMatrix = getProjectionMatrix();
@@ -165,10 +239,10 @@ int main(void){
 		// in the "MVP" uniform
 		glUniformMatrix4fv(MatrixID, 1, GL_FALSE, &MVP[0][0]);
 
+
 	  /*
 	   °Draw mesh
 		*********/
-
 		// 1rst attribute buffer : vertices
 		glEnableVertexAttribArray(0);
 		glBindBuffer(GL_ARRAY_BUFFER, vertexbuffer);
