@@ -316,9 +316,9 @@ __device__ float2 PreComputeOpticalDepth(){
     
     if( rayIsecs.x > rayIsecs.y )
         return 0;
-
+    
+    float  numSteps = NUM_INTEGRATION_STEPS;
     float3 endPos = normalizedStartPos + rayDir * rayIsecs.y;
-    float numSteps = 64;  // -------------------------------------------------------------- #$
     float3 f3Step = (endPos - normalizedStartPos) / numSteps;
 
     float totalDensity = 0;
