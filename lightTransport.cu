@@ -5,33 +5,131 @@ surface<void, cudaSurfaceType3D> surfaceOpticalDepthWrite;
 surface<void, cudaSurfaceType3D>   surfaceScatteringWrite;
 
 /*
- *  OPTICAL DEPTH: Device functions
- *  =============  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *  GENERAL: Device functions
+ *  =======  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
  __device__ void spherical2cartesian(){
 
- }
+}
 
+// Computes direction from the zenith and azimuth angles in XZY (Y Up) coordinate system
+__device__ float3 ZenithAzimuthAngleToDirectionXZY(float zenithAngle, float azimuthAngle){
+    //       Y   Zenith
+    //       |  /
+    //       | / /'
+    //       |  / '
+    //       | /  '
+    //       |/___'________X
+    //      / \  -Azimuth
+    //     /   \  '
+    //    /     \ '
+    //   Z       \'
+
+    float zenithSin, zenithCos, azimuthSin, azimuthCos;
+    sincos( zenithAngle,  zenithSin,  zenithCos);
+    sincos(azimuthAngle, azimuthSin, azimuthCos);
+
+    float3 direction;
+    direction.y = zenithCos;
+    direction.x = zenithSin * azimuthCos;
+    direction.z = zenithSin * azimuthSin;
+    
+    return direction;
+}
+
+// Computes the zenith and azimuth angles in XZY (Y Up) coordinate system from direction
+__device__ void DirectionToZenithAzimuthAngleXZY(float3 &direction, float &zenithAngle, float &azimuthAngle){
+    float zenithCos = direction.y;
+    zenithAngle = acos(zenithCos);
+    //float fZenithSin = sqrt( max(1 - zenithCos*zenithCos, 1e-10) );
+
+    float azimuthCos = direction.x;// / fZenithSin;
+    float azimuthSin = direction.z;// / fZenithSin;
+
+    azimuthAngle = atan2(azimuthSin, azimuthCos);
+}
+
+// Constructs local XYZ (Z Up) frame from Up and Inward vectors
+__device__ void ConstructLocalFrameXYZ(float3 &up, float3 &inward, 
+                                       float3 & X, float3 & Y, float3 & Z){
+    //      Z (Up)
+    //      |    Y  (Inward)
+    //      |   /
+    //      |  /
+    //      | /  
+    //      |/
+    //       -----------> X
+    //
+    Z = normalize(up);
+    X = normalize(cross(inward, Z));
+    Y = normalize(cross(Z, X));
+}
+
+// Computes direction in local XYZ (Z Up) frame from zenith and azimuth angles
+__device__ float3 GetDirectionInLocalFrameXYZ(float3 localX, 
+                                              float3 localY, 
+                                              float3 localZ,
+                                              float  localZenithAngle,
+                                              float  localAzimuthAngle){
+    // Compute sin and cos of the angle between ray direction and local zenith
+    float dirLocalSinZenithAngle, dirLocalCosZenithAngle;
+    sincos(localZenithAngle, dirLocalSinZenithAngle, dirLocalCosZenithAngle);
+
+    // Compute sin and cos of the local azimuth angle
+    float dirLocalAzimuthCos, dirLocalAzimuthSin;
+    sincos(localAzimuthAngle, dirLocalAzimuthSin, dirLocalAzimuthCos);
+    
+    // Reconstruct view ray
+    return localZ * dirLocalCosZenithAngle + 
+           dirLocalSinZenithAngle * (dirLocalAzimuthCos * localX + dirLocalAzimuthSin * localY );
+}
+
+// Computes zenith and azimuth angles in local XYZ (Z Up) frame from the direction
+__device__ void ComputeLocalFrameAnglesXYZ( float3 &localX, 
+                                            float3 &localY, 
+                                            float3 &localZ,
+                                            float3 &rayDir,
+                                            float  &localZenithAngle,
+                                            float  &localAzimuthAngle){
+    localZenithAngle = acos(saturate( dot(localZ,rayDir) ));
+
+    // Compute azimuth angle in the local frame
+    float viewDirLocalAzimuthCos = dot(rayDir,localX);
+    float viewDirLocalAzimuthSin = dot(rayDir,localY);
+
+    localAzimuthAngle = atan2(viewDirLocalAzimuthSin,viewDirLocalAzimuthCos);
+}
+
+
+// http://wiki.cgsociety.org/index.php/Ray_Sphere_Intersection
 __device__ void GetRaySphereIntersection(float3 &rayOrigin,    float3 &rayDirection, 
                                          float3 &sphereCenter, float  &sphereRadius
-                                         float2 &-){
-    // http://wiki.cgsociety.org/index.php/Ray_Sphere_Intersection
-    rayOrigin -= sphereCenter;
-    float A = dot(rayDirection, &rayDirection);
-    float B = 2 * dot(&rayOrigin, &rayDirection);
-    float C = dot(rayOrigin, rayOrigin) - sphereRadius*sphereRadius;
-    float D = B*B - 4*A*C;
+                                         float2 &intersections){
+   rayOrigin -= sphereCenter;
+   float A = dot(rayDirection, &rayDirection);
+   float B = 2 * dot(&rayOrigin, &rayDirection);
+   float C = dot(rayOrigin, rayOrigin) - sphereRadius*sphereRadius;
+   float D = B*B - 4*A*C;
 
-    // If discriminant is negative, there are no real roots hence the ray misses the
-    // sphere
-    if( D<0 ){
-        intersections = float2(-1,-1);
-    }
-    else{
-        D = sqrt(D);
-        intersections = float2(-B - D, -B + D) / (2*A); // A must be positive here!!
-    }
+   // If discriminant is negative, there are no real roots hence the ray misses the
+   // sphere
+   if( D<0 ){
+       intersections = float2(-1,-1);
+   }
+   else{
+       D = sqrt(D);
+       intersections = float2(-B - D, -B + D) / (2*A); // A must be positive here!!
+   }
 }
+
+
+
+
+/*
+ *  OPTICAL DEPTH: Device functions
+ *  =============  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ */
+ 
 
 // All noise functions are designed for values on integer scale.
 // They are tuned to avoid visible periodicity for both positive and
@@ -118,6 +216,7 @@ __device__ float2 PreComputeOpticalDepth(){
     }
     return totalDensity / numSteps;
 }
+
 
 /*
  *  SCATTERING: Device functions
