@@ -12,11 +12,71 @@ out vec2 fragmentCoordinate;
 // Values that stay constant for the whole mesh.
 uniform mat4 MVP;
 
+
+#ifndef OPTIMIZE_SAMPLE_LOCATIONS
+#   define OPTIMIZE_SAMPLE_LOCATIONS 1
+#endif
+
+#ifndef CORRECT_INSCATTERING_AT_DEPTH_BREAKS
+#   define CORRECT_INSCATTERING_AT_DEPTH_BREAKS 0
+#endif
+
+//#define SHADOW_MAP_DEPTH_BIAS 1e-4
+
+#ifndef TRAPEZOIDAL_INTEGRATION
+#   define TRAPEZOIDAL_INTEGRATION 1
+#endif
+
+#ifndef ENABLE_LIGHT_SHAFTS
+#   define ENABLE_LIGHT_SHAFTS 1
+#endif
+
+#ifndef IS_32BIT_MIN_MAX_MAP
+#   define IS_32BIT_MIN_MAX_MAP 0
+#endif
+
+#ifndef SINGLE_SCATTERING_MODE
+#   define SINGLE_SCATTERING_MODE SINGLE_SCTR_MODE_LUT
+#endif
+
+#ifndef MULTIPLE_SCATTERING_MODE
+#   define MULTIPLE_SCATTERING_MODE MULTIPLE_SCTR_MODE_OCCLUDED
+#endif
+
+#ifndef PRECOMPUTED_SCTR_LUT_DIM
+#   define PRECOMPUTED_SCTR_LUT_DIM float4(32,128,32,16)
+#endif
+
+#ifndef NUM_RANDOM_SPHERE_SAMPLES
+#   define NUM_RANDOM_SPHERE_SAMPLES 128
+#endif
+
+#ifndef PERFORM_TONE_MAPPING
+#   define PERFORM_TONE_MAPPING 1
+#endif
+
+#ifndef LOW_RES_LUMINANCE_MIPS
+#   define LOW_RES_LUMINANCE_MIPS 7
+#endif
+
+#ifndef TONE_MAPPING_MODE
+#   define TONE_MAPPING_MODE TONE_MAPPING_MODE_REINHARD_MOD
+#endif
+
+#ifndef LIGHT_ADAPTATION
+#   define LIGHT_ADAPTATION 1
+#endif
+
+#ifndef SHAFTS_FROM_CLOUDS_MODE
+#   define SHAFTS_FROM_CLOUDS_MODE SHAFTS_FROM_CLOUDS_TRANSPARENCY_MAP
+#endif
+
+#define INVALID_EPIPOLAR_LINE float4(-1000,-1000, -100, -100)
+
 /*
  *  GENERAL: 
  *  =======  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
-
 
 // This function for analytical evaluation of particle density integral is 
 // provided by Eric Bruneton
@@ -304,13 +364,10 @@ void InsctrLUTCoords2WorldParams(in float4 f4UVWQ,
     // to use max() with small positive value:
     D = sqrt( max(D, 1e-20) );
     
-    // The issue was reproduceable on NV GTX 680, driver version 9.18.13.2723 (9/12/2013).
-    // The problem does not arise on Intel hardware
-
     float2 f2MinMaxCosSunViewAngle = fCosViewZenithAngle*fCosSunZenithAngle + float2(-D, +D);
-    // Clamp to allowable range
+    
+	// Clamp to allowable range
     fCosSunViewAngle    = clamp(fCosSunViewAngle, f2MinMaxCosSunViewAngle.x, f2MinMaxCosSunViewAngle.y);
-
 }
 
 
