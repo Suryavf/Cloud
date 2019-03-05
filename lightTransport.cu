@@ -5,8 +5,8 @@ surface<void, cudaSurfaceType3D> surfaceOpticalDepthWrite;
 surface<void, cudaSurfaceType3D>   surfaceScatteringWrite;
 
 /*
- *  Device functions
- *  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *  OPTICAL DEPTH: Device functions
+ *  =============  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
  __device__ void spherical2cartesian(){
 
@@ -14,7 +14,7 @@ surface<void, cudaSurfaceType3D>   surfaceScatteringWrite;
 
 __device__ void GetRaySphereIntersection(float3 &rayOrigin,    float3 &rayDirection, 
                                          float3 &sphereCenter, float  &sphereRadius
-                                         float2 &intersections){
+                                         float2 &-){
     // http://wiki.cgsociety.org/index.php/Ray_Sphere_Intersection
     rayOrigin -= sphereCenter;
     float A = dot(rayDirection, &rayDirection);
@@ -32,6 +32,102 @@ __device__ void GetRaySphereIntersection(float3 &rayOrigin,    float3 &rayDirect
         intersections = float2(-B - D, -B + D) / (2*A); // A must be positive here!!
     }
 }
+
+// All noise functions are designed for values on integer scale.
+// They are tuned to avoid visible periodicity for both positive and
+// negative coordinates within a few orders of magnitude.
+// https://www.shadertoy.com/view/4dS3Wd
+__device__ float hash(float  n){ 
+    return fract(sin(n) * 1e4); 
+}
+__device__ float hash(float2 p) { 
+    return fract(1e4 * sin(17.0 * p.x + p.y * 0.1) * (0.1 + abs(sin(p.y * 13.0 + p.x)))); 
+}
+__device__ float noise(float3 x) {
+    const vec3 step = vec3(110, 241, 171);
+
+    vec3 i = floor(x);
+    vec3 f = fract(x);
+ 
+    // For performance, compute the base input to a 1D hash from the integer part of the argument and the 
+    // incremental change to the 1D based on the 3D -> 1D wrapping
+    float n = dot(i, step);
+
+    vec3 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix( hash(n + dot(step, vec3(0, 0, 0))), hash(n + dot(step, vec3(1, 0, 0))), u.x),
+                   mix( hash(n + dot(step, vec3(0, 1, 0))), hash(n + dot(step, vec3(1, 1, 0))), u.x), u.y),
+               mix(mix( hash(n + dot(step, vec3(0, 0, 1))), hash(n + dot(step, vec3(1, 0, 1))), u.x),
+                   mix( hash(n + dot(step, vec3(0, 1, 1))), hash(n + dot(step, vec3(1, 1, 1))), u.x), u.y), u.z);
+}
+// By Morgan McGuire @morgan3d, http://graphicscodex.com
+// Reuse permitted under the BSD license.
+
+__device__ float GetRandomDensity(float3 pos, float startFreq, int n_Octaves = 3, float amplitudeScale = 0.6){
+    float noiseFrame = 0;
+    float amplitude = 1;
+    float fFreq = startFreq;
+    for(int i=0; i < n_Octaves; ++i){
+        noiseFrame += ( noise( pos*fFreq ) - 0.5 ) * amplitude;
+        fFreq *= 1.7;
+        amplitude *= amplitudeScale;
+    }
+    return noiseFrame;
+}
+
+__device__ float GetMetabolDensity(float r){
+    float r2 = r*r;
+    float r4 = r2*r2;
+    float r6 = r4*r2;
+    return saturate(-4.0/9.0 * r6 + 17.0/9.0 * r4 - 22.0/9.0 * r2 + 1);
+}
+
+__device__ float ComputeDensity(float3 currPos){
+	float distToCenter   = length(currPos);
+    float metabolDensity = GetMetabolDensity(distToCenter);
+	float density = 0.f;
+
+    density = saturate( 1.0*saturate(metabolDensity) + 1*pow(metabolDensity,0.5)*(GetRandomDensity(currPos + 0.5, 0.15, 4, 0.7 )) );
+
+	return density;
+}
+
+__device__ float2 PreComputeOpticalDepth(){
+    // This shader computes level 0 of the maximum density mip map
+
+    float3 normalizedStartPos, rayDir;
+    //OpticalDepthLUTCoordsToWorldParams( float4(ProjToUV(In.m_f2PosPS), g_GlobalCloudAttribs.f4Parameter.xy), normalizedStartPos, rayDir );
+    
+    // Intersect the view ray with the unit sphere:
+    float2 rayIsecs;
+    // normalizedStartPos  is located exactly on the surface; slightly move start pos inside the sphere
+    // to avoid precision issues
+    GetRaySphereIntersection(normalizedStartPos + rayDir*1e-4, rayDir, 0, 1.f, rayIsecs);
+    
+    if( rayIsecs.x > rayIsecs.y )
+        return 0;
+
+    float3 endPos = normalizedStartPos + rayDir * rayIsecs.y;
+    float numSteps = 64;  // -------------------------------------------------------------- #$
+    float3 f3Step = (endPos - normalizedStartPos) / numSteps;
+
+    float totalDensity = 0;
+    for(float fStepNum=0.5; fStepNum < numSteps; ++fStepNum){
+        float3 f3CurrPos = normalizedStartPos + f3Step * fStepNum;
+        float density = ComputeDensity(f3CurrPos);
+        totalDensity += density;
+    }
+    return totalDensity / numSteps;
+}
+
+/*
+ *  SCATTERING: Device functions
+ *  ==========  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ */
+
+
+
+
+
 
 
 /*
@@ -53,31 +149,7 @@ __device__ void GetRaySphereIntersection(float3 &rayOrigin,    float3 &rayDirect
 
     /*+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-*/
 
-    // This shader computes level 0 of the maximum density mip map
-
     
-    float3 normalizedStartPos, rayDir;
-    //OpticalDepthLUTCoordsToWorldParams( float4(ProjToUV(In.m_f2PosPS), g_GlobalCloudAttribs.f4Parameter.xy), normalizedStartPos, rayDir );
-    
-    // Intersect the view ray with the unit sphere:
-    float2 rayIsecs;
-    // normalizedStartPos  is located exactly on the surface; slightly move start pos inside the sphere
-    // to avoid precision issues
-    GetRaySphereIntersection(normalizedStartPos + rayDir*1e-4, rayDir, 0, 1.f, rayIsecs);
-    
-    if( rayIsecs.x > rayIsecs.y )
-        return 0;
-
-    float3 endPos = normalizedStartPos + rayDir * rayIsecs.y;
-    float fNumSteps = NUM_INTEGRATION_STEPS;  // -------------------------------------------------------------- #$
-    float3 f3Step = (endPos - normalizedStartPos) / fNumSteps;
-    float fTotalDensity = 0;
-    for(float fStepNum=0.5; fStepNum < fNumSteps; ++fStepNum){
-        float3 f3CurrPos = normalizedStartPos + f3Step * fStepNum;
-        float fDensity = ComputeDensity(f3CurrPos);
-        fTotalDensity += fDensity;
-    }
-    return fTotalDensity / fNumSteps;
 }
 
  __global__ void ScatteringKernel(dim3 texDim){
