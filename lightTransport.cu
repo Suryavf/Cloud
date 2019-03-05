@@ -1,5 +1,27 @@
 #include "lightTransport.h"
 
+#ifndef OPTICAL_DEPTH_LUT_DIM
+#   define OPTICAL_DEPTH_LUT_DIM float4(64,32,64,32)
+#endif
+
+#ifndef NUM_PARTICLE_LAYERS
+#   define NUM_PARTICLE_LAYERS 1
+#endif
+
+#ifndef SRF_SCATTERING_IN_PARTICLE_LUT_DIM
+#   define SRF_SCATTERING_IN_PARTICLE_LUT_DIM float3(32,64,16)
+#endif
+
+#ifndef VOL_SCATTERING_IN_PARTICLE_LUT_DIM
+#   define VOL_SCATTERING_IN_PARTICLE_LUT_DIM float4(32,64,32,8)
+#endif
+
+#ifndef THREAD_GROUP_SIZE
+#   define THREAD_GROUP_SIZE 64
+#endif
+
+#define NUM_INTEGRATION_STEPS 64
+
 //Global scope surface to bind to
 surface<void, cudaSurfaceType3D> surfaceOpticalDepthWrite;
 surface<void, cudaSurfaceType3D>   surfaceScatteringWrite;
@@ -100,7 +122,7 @@ __device__ void ComputeLocalFrameAnglesXYZ( float3 &localX,
     localAzimuthAngle = atan2(viewDirLocalAzimuthSin,viewDirLocalAzimuthCos);
 }
 
-
+// Get Ray Sphere Intersection
 // http://wiki.cgsociety.org/index.php/Ray_Sphere_Intersection
 __device__ void GetRaySphereIntersection(float3 &rayOrigin,    float3 &rayDirection, 
                                          float3 &sphereCenter, float  &sphereRadius
@@ -123,6 +145,10 @@ __device__ void GetRaySphereIntersection(float3 &rayOrigin,    float3 &rayDirect
 }
 
 
+__device__ float HGPhaseFunc(float cosTheta, const float g = 0.9){
+    return (1/(4*PI) * (1 - g*g)) / pow( max((1 + g*g) - (2*g)*cosTheta,0), 3.f/2.f);
+}
+
 
 
 /*
@@ -130,6 +156,93 @@ __device__ void GetRaySphereIntersection(float3 &rayOrigin,    float3 &rayDirect
  *  =============  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
  
+    /*+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-*/
+
+ #define SAMPLE_4D_LUT(tex3DLUT, LUT_DIM, f4LUTCoords, fLOD, Result)  \
+ {                                                               \
+     float3 f3UVW;                                               \
+     f3UVW.xy = f4LUTCoords.xy;                                  \
+     float fQSlice = f4LUTCoords.w * LUT_DIM.w - 0.5;            \
+     float fQ0Slice = floor(fQSlice);                            \
+     float fQWeight = fQSlice - fQ0Slice;                        \
+                                                                 \
+     f3UVW.z = (fQ0Slice + f4LUTCoords.z) / LUT_DIM.w;           \
+                                                                 \
+     Result = lerp(                                              \
+         tex3DLUT.SampleLevel(samLinearWrap, f3UVW, fLOD),       \
+         /* frac() assures wraparound filtering of w coordinate*/                            \
+         tex3DLUT.SampleLevel(samLinearWrap, frac(f3UVW + float3(0,0,1/LUT_DIM.w)), fLOD),   \
+         fQWeight);                                                                          \
+ }
+
+ void ParticleScatteringLUTToWorldParams(in float4 f4LUTCoords, 
+                                        out float3 f3StartPosUSSpace,
+                                        out float3 f3ViewDirUSSpace,
+                                        out float3 f3LightDirUSSpace,
+                                        in uniform bool bSurfaceOnly){
+    f3LightDirUSSpace = float3(0,0,1);
+    float fStartPosZenithAngle = f4LUTCoords.x * PI;
+    f3StartPosUSSpace = float3(0,0,0);
+    sincos(fStartPosZenithAngle, f3StartPosUSSpace.x, f3StartPosUSSpace.z);
+
+    float3 f3LocalX, f3LocalY, f3LocalZ;
+    ConstructLocalFrameXYZ(-f3StartPosUSSpace, f3LightDirUSSpace, f3LocalX, f3LocalY, f3LocalZ);
+
+    if( !bSurfaceOnly )
+    {
+    float fDistFromCenter = f4LUTCoords.w;
+    // Scale the start position according to the distance from center
+    f3StartPosUSSpace *= fDistFromCenter;
+    }
+
+    float fViewDirLocalAzimuth = (f4LUTCoords.y - 0.5) * (2 * PI); 
+    float fViewDirLocalZenith = f4LUTCoords.z * ( bSurfaceOnly ? (PI/2) : PI );
+    f3ViewDirUSSpace = GetDirectionInLocalFrameXYZ(f3LocalX, f3LocalY, f3LocalZ, fViewDirLocalZenith, fViewDirLocalAzimuth);
+}
+
+// All parameters must be defined in the unit sphere (US) space
+float4 WorldParamsToParticleScatteringLUT(  in float3 f3StartPosUSSpace, 
+                                            in float3 f3ViewDirInUSSpace, 
+                                            in float3 f3LightDirInUSSpace,
+                                            in uniform bool bSurfaceOnly){
+                                            float4 f4LUTCoords = 0;
+
+    float fDistFromCenter = 0;
+    if( !bSurfaceOnly ){
+        // Compute distance from center and normalize start position
+        fDistFromCenter = length(f3StartPosUSSpace);
+        f3StartPosUSSpace /= max(fDistFromCenter, 1e-5);
+    }
+    float fStartPosZenithCos = dot(f3StartPosUSSpace, f3LightDirInUSSpace);
+    f4LUTCoords.x = acos(fStartPosZenithCos);
+
+    float3 f3LocalX, f3LocalY, f3LocalZ;
+    ConstructLocalFrameXYZ(-f3StartPosUSSpace, f3LightDirInUSSpace, f3LocalX, f3LocalY, f3LocalZ);
+
+    float fViewDirLocalZenith, fViewDirLocalAzimuth;
+    ComputeLocalFrameAnglesXYZ(f3LocalX, f3LocalY, f3LocalZ, f3ViewDirInUSSpace, fViewDirLocalZenith, fViewDirLocalAzimuth);
+    f4LUTCoords.y = fViewDirLocalAzimuth;
+    f4LUTCoords.z = fViewDirLocalZenith;
+
+    // In case the parameterization is performed for the sphere surface, the allowable range for the 
+    // view direction zenith angle is [0, PI/2] since the ray should always be directed into the sphere.
+    // Otherwise the range is whole [0, PI]
+    f4LUTCoords.xyz = f4LUTCoords.xyz / float3(PI, 2*PI, bSurfaceOnly ? (PI/2) : PI) + float3(0, 0.5, 0);
+    if( bSurfaceOnly )
+        f4LUTCoords.w = 0;
+    else
+        f4LUTCoords.w = fDistFromCenter;
+    
+    if( bSurfaceOnly )
+        f4LUTCoords.xz = clamp(f4LUTCoords.xyz, 0.5/SRF_SCATTERING_IN_PARTICLE_LUT_DIM, 1-0.5/SRF_SCATTERING_IN_PARTICLE_LUT_DIM).xz;
+    else
+        f4LUTCoords.xzw = clamp(f4LUTCoords, 0.5/VOL_SCATTERING_IN_PARTICLE_LUT_DIM, 1-0.5/VOL_SCATTERING_IN_PARTICLE_LUT_DIM).xzw;
+
+    return f4LUTCoords;
+}
+
+/*+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-*/
+
 
 // All noise functions are designed for values on integer scale.
 // They are tuned to avoid visible periodicity for both positive and
@@ -219,9 +332,160 @@ __device__ float2 PreComputeOpticalDepth(){
 
 
 /*
- *  SCATTERING: Device functions
- *  ==========  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *  SINGLE SCATTERING: Device functions
+ *  =================  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
+// float PrecomputeSingleSctrPS(SScreenSizeQuadVSOutput In)
+__device__ float PrecomputeSingleSctrPS(){
+
+    //float4 LUTCoords = float4(ProjToUV(In.m_f2PosPS), g_GlobalCloudAttribs.f4Parameter.xy);
+ 
+    float3 entryPointUSSpace, viewRayUSSpace, lightDirUSSpace;
+    ParticleScatteringLUTToWorldParams(LUTCoords, entryPointUSSpace, viewRayUSSpace, lightDirUSSpace, false);
+ 
+    // Intersect view ray with the unit sphere:
+    float2 rayIsecs;
+    // f3NormalizedStartPos  is located exactly on the surface; slightly move the start pos inside the sphere
+    // to avoid precision issues
+    float3 biasedEntryPoint = entryPointUSSpace + viewRayUSSpace*1e-4;
+    GetRaySphereIntersection(biasedEntryPoint, viewRayUSSpace, 0, 1.f, rayIsecs);
+
+    if( rayIsecs.y < rayIsecs.x )
+        return 0;
+    float3 endPos = biasedEntryPoint + viewRayUSSpace * rayIsecs.y;
+ 
+    float numSteps = NUM_INTEGRATION_STEPS;
+    float3 step = (endPos - entryPointUSSpace) / numSteps;
+    float stepLen = length(step);
+    float cloudMassToCamera = 0;
+    float particleRadius = g_GlobalCloudAttribs.fReferenceParticleRadius;
+    float inscattering = 0;
+    for(float stepNum=0.5; stepNum < numSteps; ++stepNum){
+        float3 currPos = entryPointUSSpace + step * stepNum;
+        float  cloudMassToLight = 0;
+        GetRaySphereIntersection(currPos, lightDirUSSpace, 0, 1.f, rayIsecs);
+         
+        if( rayIsecs.y > rayIsecs.x ){
+            // Since we are using the light direction (not direction on light), we have to use 
+            // the first intersection point:
+            cloudMassToLight = abs(rayIsecs.x) * particleRadius;
+        }
+ 
+        float totalLightAttenuation = exp( -g_GlobalCloudAttribs.fAttenuationCoeff * (cloudMassToLight + cloudMassToCamera) );
+        inscattering += totalLightAttenuation * g_GlobalCloudAttribs.fScatteringCoeff;
+        cloudMassToCamera += stepLen * particleRadius;
+    }
+ 
+    return inscattering * stepLen * particleRadius;
+ }
+
+
+
+
+
+
+
+
+
+/*
+ *  MULTIPLE SCATTERING: Device functions
+ *  ===================  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ */
+
+//float GatherScatteringPS(SScreenSizeQuadVSOutput In) : SV_Target{
+__device__ float GatherScatteringPS(){
+    //float4 LUTCoords = float4(ProjToUV(In.m_f2PosPS), g_GlobalCloudAttribs.f4Parameter.xy);
+
+    float3 posUSSpace, viewRayUSSpace, lightDirUSSpace;
+    ParticleScatteringLUTToWorldParams(LUTCoords, posUSSpace, viewRayUSSpace, lightDirUSSpace, false);
+
+    float3 localX, localY, localZ;
+    ConstructLocalFrameXYZ(-normalize(posUSSpace), lightDirUSSpace, localX, localY, localZ);
+
+    float gatheredScattering = 0;
+    float totalSolidAngle = 0;
+    const float numZenithAngles  = VOL_SCATTERING_IN_PARTICLE_LUT_DIM.z;
+    const float numAzimuthAngles = VOL_SCATTERING_IN_PARTICLE_LUT_DIM.y;
+    const float zenithSpan  =   PI;
+    const float azimuthSpan = 2*PI;
+    for(float ZenithAngleNum = 0.5; ZenithAngleNum < numZenithAngles; ++ZenithAngleNum)
+        for(float AzimuthAngleNum = 0.5; AzimuthAngleNum < numAzimuthAngles; ++AzimuthAngleNum){
+
+            float  ZenithAngle = ZenithAngleNum/numZenithAngles * zenithSpan;
+            float  AzimuthAngle = (AzimuthAngleNum/numAzimuthAngles - 0.5) * azimuthSpan;
+            float3 currDir = GetDirectionInLocalFrameXYZ(localX, localY, localZ, ZenithAngle, AzimuthAngle);
+            float4 currDirLUTCoords = WorldParamsToParticleScatteringLUT(posUSSpace, currDir, lightDirUSSpace, false);
+            float  currDirScattering = 0;
+
+            SAMPLE_4D_LUT(g_tex3DPrevSctrOrder, VOL_SCATTERING_IN_PARTICLE_LUT_DIM, currDirLUTCoords, 0, currDirScattering);
+
+            if( g_GlobalCloudAttribs.f4Parameter.w == 1 ){
+                currDirScattering *= HGPhaseFunc( dot(-currDir, lightDirUSSpace) );
+            }
+            currDirScattering *= HGPhaseFunc( dot(currDir, viewRayUSSpace), 0.7 );
+
+            float fdZenithAngle  = zenithSpan / numZenithAngles;
+            float fdAzimuthAngle = azimuthSpan / numAzimuthAngles * sin(ZenithAngle);
+            float diffSolidAngle = fdZenithAngle * fdAzimuthAngle;
+            totalSolidAngle += diffSolidAngle;
+            gatheredScattering += currDirScattering * diffSolidAngle;
+        }
+    
+    // Total solid angle should be 4*PI. Renormalize to fix discretization issues
+    gatheredScattering *= 4*PI / totalSolidAngle;
+
+    return gatheredScattering;
+}
+
+
+//float ComputeScatteringOrderPS(SScreenSizeQuadVSOutput In) : SV_Target
+//{
+__device__ float ComputeScatteringOrderPS(){
+
+    //float4 startPointLUTCoords = float4(ProjToUV(In.m_f2PosPS), g_GlobalCloudAttribs.f4Parameter.xy);
+
+    float3 posUSSpace, viewRayUSSpace, lightDirUSSpace;
+    //ParticleScatteringLUTToWorldParams(startPointLUTCoords, posUSSpace, viewRayUSSpace, lightDirUSSpace, false);
+
+    // Intersect view ray with the unit sphere:
+    float2 rayIsecs;
+    // f3NormalizedStartPos  is located exactly on the surface; slightly move start pos inside the sphere
+    // to avoid precision issues
+    float3 biasedPos = posUSSpace + viewRayUSSpace*1e-4;
+    GetRaySphereIntersection(biasedPos, viewRayUSSpace, 0, 1.f, rayIsecs);
+    
+    if( rayIsecs.y < rayIsecs.x )
+        return 0;
+
+    float3 endPos = biasedPos + viewRayUSSpace * rayIsecs.y;
+    float  numSteps = max(VOL_SCATTERING_IN_PARTICLE_LUT_DIM.w*2, NUM_INTEGRATION_STEPS)*2;
+    float3 step = (endPos - posUSSpace) / numSteps;
+    float stepLen = length(step);
+    float cloudMassToCamera = 0;
+    //float particleRadius = g_GlobalCloudAttribs.fReferenceParticleRadius;
+    float inscattering = 0;
+
+    float prevGatheredSctr = 0;
+    SAMPLE_4D_LUT(g_tex3DGatheredScattering, VOL_SCATTERING_IN_PARTICLE_LUT_DIM, startPointLUTCoords, 0, prevGatheredSctr);
+    
+    // Light attenuation == 1
+    for(float stepNum=1; stepNum <= numSteps; ++stepNum){
+        float3 currPos = posUSSpace + step * stepNum;
+
+        cloudMassToCamera += stepLen * particleRadius;
+        float attenuationToCamera = exp( -g_GlobalCloudAttribs.fAttenuationCoeff * fCloudMassToCamera );
+
+        float4 currDirLUTCoords = WorldParamsToParticleScatteringLUT(currPos, viewRayUSSpace, lightDirUSSpace, false);
+        float gatheredScattering = 0;
+        SAMPLE_4D_LUT(g_tex3DGatheredScattering, VOL_SCATTERING_IN_PARTICLE_LUT_DIM, currDirLUTCoords, 0, gatheredScattering);
+        gatheredScattering *= attenuationToCamera;
+
+        inscattering += (gatheredScattering + prevGatheredSctr) /2;
+        prevGatheredSctr = gatheredScattering;
+    }
+
+    return inscattering * stepLen * particleRadius * g_GlobalCloudAttribs.fScatteringCoeff;
+}
 
 
 
