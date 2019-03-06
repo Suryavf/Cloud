@@ -90,6 +90,8 @@ struct SCloudParticleLighting{
  *  =======  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 
+
+
 // Computes the zenith and azimuth angles in XZY (Y Up) coordinate system from direction
 void DirectionToZenithAzimuthAngleXZY(in vec3 f3Direction, out float fZenithAngle, out float fAzimuthAngle){
     float fZenithCos = f3Direction.y;
@@ -137,11 +139,11 @@ void ComputeLocalFrameAnglesXYZ(in  vec3  f3LocalX,
 // http://wiki.cgsociety.org/index.php/Ray_Sphere_Intersection
 #define NO_INTERSECTIONS vec2(-1,-2)
 
-void GetRaySphereIntersection(in vec3 f3RayOrigin,
-                              in vec3 f3RayDirection,
-                              in vec3 f3SphereCenter,
-                              in float fSphereRadius,
-                              out vec2 f2Intersections){
+void GetRaySphereIntersection(in  vec3  f3RayOrigin,
+                              in  vec3  f3RayDirection,
+                              in  vec3  f3SphereCenter,
+                              in  float fSphereRadius,
+                              out vec2  f2Intersections){
     f3RayOrigin -= f3SphereCenter;
     float A = dot(f3RayDirection, f3RayDirection);
     float B = 2 * dot(f3RayOrigin, f3RayDirection);
@@ -328,9 +330,9 @@ void WorldParamsToOpticalDepthLUTCoords(in vec3 f3NormalizedStartPos, in vec3 f3
 // All parameters must be defined in the unit sphere (US) space
 vec4 WorldParamsToParticleScatteringLUT( in vec3 f3StartPosUSSpace, 
                                          in vec3 f3ViewDirInUSSpace, 
-                                         in vec3 f3LightDirInUSSpace,
-                                         in uniform bool bSurfaceOnly){
+                                         in vec3 f3LightDirInUSSpace){
     vec4 f4LUTCoords = 0;
+    bool bSurfaceOnly = true;
 
     float fDistFromCenter = 0;
     if( !bSurfaceOnly ){
@@ -478,7 +480,7 @@ void ComputeParticleRenderAttribs(  const in SParticleAttribs       ParticleAttr
 	vec3 f3SingleScattering =  fTransparency *  ParticleLighting.f4SunLight.xyz * f2SunLightAttenuation.x * PhaseFunc * pow(CellAttrs.fMorphFadeout,2);
 
     // Multiple Scattering
-	vec4  f4MultipleScatteringLUTCoords = WorldParamsToParticleScatteringLUT(f3EntryPointUSSpace, f3ViewRayUSSpace, f3LightDirUSSpace, true);
+	vec4  f4MultipleScatteringLUTCoords = WorldParamsToParticleScatteringLUT(f3EntryPointUSSpace, f3ViewRayUSSpace, f3LightDirUSSpace);
 
     float fMultipleScattering = texture3D(g_tex3DMultipleScatteringInParticleLUT,  f4MultipleScatteringLUTCoords.xyz).r; 
 	vec3  f3MultipleScattering = (1-fTransparency) * fMultipleScattering * f2SunLightAttenuation.y * ParticleLighting.f4SunLight.xyz;
@@ -501,6 +503,73 @@ void ComputeParticleRenderAttribs(  const in SParticleAttribs       ParticleAttr
 
     f4Color.w = fTransparency;
 }
+
+
+
+// This shader renders particles
+void RenderCloudsPS(PS_Input In,
+                    out float fTransparency : SV_Target0,
+                    out float fDistToCloud  : SV_Target1,
+                    out vec4  f4Color       : SV_Target2
+                    ){
+
+    SParticleAttribs          ParticleAttrs = g_Particles          [In.uiParticleID];
+    SCloudCellAttribs           CellAttribs = g_CloudCells         [In.uiParticleID / g_GlobalCloudAttribs.uiMaxLayers];
+    SCloudParticleLighting ParticleLighting = g_bufParticleLighting[In.uiParticleID];
+
+    vec3 f3CameraPos, f3ViewRay;
+
+    f3CameraPos = g_CameraAttribs.f4CameraPos.xyz;  // Posicion de camara
+    f3ViewRay   =         normalize(In.f3ViewRay);  // direccion de vista?
+    
+    vec2 f2ScreenDim = vec2(1024, 768);
+    vec2 f2PosPS = UVToProj( In.f4Pos.xy / f2ScreenDim );
+    
+    float fDepth = GetConservativeScreenDepth( ProjToUV(f2PosPS.xy) );
+    vec4  f4ReconstructedPosWS = mul( ve4(f2PosPS.xy,fDepth,1.0), g_CameraAttribs.mViewProjInv );
+    vec3  f3WorldPos = f4ReconstructedPosWS.xyz / f4ReconstructedPosWS.w;
+
+    // Compute view ray
+    f3ViewRay = f3WorldPos - f3CameraPos;
+    float fRayLength = length(f3ViewRay);
+    f3ViewRay /= fRayLength;
+
+    // Intersect view ray with the particle
+    vec2  f2RayIsecs;
+    float fDistanceToEntryPoint, fDistanceToExitPoint;
+    vec3  f3EntryPointUSSpace, f3ViewRayUSSpace, f3LightDirUSSpace;
+    IntersectRayWithParticle(ParticleAttrs, CellAttribs, f3CameraPos,  f3ViewRay,
+                             f2RayIsecs, f3EntryPointUSSpace, f3ViewRayUSSpace,
+                             f3LightDirUSSpace,
+                             fDistanceToEntryPoint, fDistanceToExitPoint);
+   
+    if( f2RayIsecs.y < 0 || fRayLength < fDistanceToEntryPoint )
+        discard;
+    fDistanceToExitPoint = min(fDistanceToExitPoint, fRayLength);
+
+    float fCloudMass;
+    float fIsecLenUSSpace = f2RayIsecs.y - f2RayIsecs.x;
+
+    // Compute particle rendering attributes
+    ComputeParticleRenderAttribs(   ParticleAttrs, 
+                                    CellAttribs,
+                                    ParticleLighting,
+                                    f3CameraPos,
+                                    f3ViewRay,
+                                    f3EntryPointUSSpace, 
+                                    f3ViewRayUSSpace,
+                                    f3LightDirUSSpace,
+                                    fDistanceToExitPoint,
+                                    fDistanceToEntryPoint,
+                                    f4Color
+                                    );
+
+    fTransparency = f4Color.w;
+    f4Color.xyz  *= 1-fTransparency;
+    fDistToCloud  = fTransparency < 0.99 ? fDistanceToEntryPoint : +FLT_MAX;
+}
+
+
 
 
 /*
