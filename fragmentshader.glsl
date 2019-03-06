@@ -25,6 +25,7 @@ uniform sampler3D g_tex3DMultipleScatteringInParticleLUT;
 #define SRF_SCATTERING_IN_PARTICLE_LUT_DIM vec3(32,64,16)
 #define VOL_SCATTERING_IN_PARTICLE_LUT_DIM vec4(32,64,32,8)
 
+#define LERP(v0,v1,t) (1-t)*v0 + t*v1
 #define SAMPLE_4D_LUT(tex3D, LUT_DIM, f4LUTCoords, Result){   \
     vec3  f3UVW;                                                    \
     f3UVW.xy = f4LUTCoords.xy;                                      \
@@ -34,7 +35,7 @@ uniform sampler3D g_tex3DMultipleScatteringInParticleLUT;
                                                                     \
     f3UVW.z = (fQ0Slice + f4LUTCoords.z) / LUT_DIM.w;               \
                                                                     \
-    Result = mix(  texture3D(tex3D,      f3UVW                          ).r,  \ 
+    Result = LERP( texture3D(tex3D,      f3UVW                          ).r,  \ 
                    texture3D(tex3D, frac(f3UVW + vec3(0,0,1/LUT_DIM.w)) ).r,  \ 
                    fQWeight);                                                 \
 }
