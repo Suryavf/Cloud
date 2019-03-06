@@ -73,6 +73,12 @@ uniform mat4 MVP;
 
 #define INVALID_EPIPOLAR_LINE float4(-1000,-1000, -100, -100)
 
+static const float SafetyHeightMargin = 16.f;
+static const float HeightPower = 0.5f;
+static const float ViewZenithPower = 0.2;
+static const float SunViewPower = 1.5f;
+
+
 /*
  *  GENERAL: 
  *  =======  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -209,8 +215,6 @@ float4 WorldParams2InsctrLUTCoords(float fHeight,
     // fHeight == AtmTopHeight respectively)
     fHeight = clamp(fHeight, SafetyHeightMargin, g_MediaParams.fAtmTopHeight - SafetyHeightMargin);
     f4UVWQ.x = saturate( (fHeight - SafetyHeightMargin) / (g_MediaParams.fAtmTopHeight - 2*SafetyHeightMargin) );
-
-#if NON_LINEAR_PARAMETERIZATION
     f4UVWQ.x = pow(f4UVWQ.x, HeightPower);
 
     f4UVWQ.y = ZenithAngle2TexCoord(fCosViewZenithAngle, fHeight, PRECOMPUTED_SCTR_LUT_DIM.y, ViewZenithPower, f4RefUVWQ.y);
@@ -223,13 +227,6 @@ float4 WorldParams2InsctrLUTCoords(float fHeight,
     f4UVWQ.w = sign(f4UVWQ.w - 0.5) * pow( abs((f4UVWQ.w - 0.5)/0.5), SunViewPower)/2 + 0.5;
     
     f4UVWQ.xzw = ((f4UVWQ * (PRECOMPUTED_SCTR_LUT_DIM-1) + 0.5) / PRECOMPUTED_SCTR_LUT_DIM).xzw;
-#else
-    f4UVWQ.y = (fCosViewZenithAngle+1.f) / 2.f;
-    f4UVWQ.z = (fCosSunZenithAngle +1.f) / 2.f;
-    f4UVWQ.w = (fCosSunViewAngle   +1.f) / 2.f;
-
-    f4UVWQ = (f4UVWQ * (PRECOMPUTED_SCTR_LUT_DIM-1) + 0.5) / PRECOMPUTED_SCTR_LUT_DIM;
-#endif
 
     return f4UVWQ;
 }
@@ -308,18 +305,12 @@ float TexCoord2ZenithAngle(float fTexCoord, float fHeight, in float fTexDim, flo
     return fCosZenithAngle;
 }
 
-static const float SafetyHeightMargin = 16.f;
-#define NON_LINEAR_PARAMETERIZATION 1
-static const float HeightPower = 0.5f;
-static const float ViewZenithPower = 0.2;
-static const float SunViewPower = 1.5f;
-
 void InsctrLUTCoords2WorldParams(in float4 f4UVWQ,
                                  out float fHeight,
                                  out float fCosViewZenithAngle,
                                  out float fCosSunZenithAngle,
                                  out float fCosSunViewAngle){
-#if NON_LINEAR_PARAMETERIZATION
+
     // Rescale to exactly 0,1 range
     f4UVWQ.xzw = saturate((f4UVWQ* PRECOMPUTED_SCTR_LUT_DIM - 0.5) / (PRECOMPUTED_SCTR_LUT_DIM-1)).xzw;
 
@@ -335,18 +326,6 @@ void InsctrLUTCoords2WorldParams(in float4 f4UVWQ,
 
     f4UVWQ.w = sign(f4UVWQ.w - 0.5) * pow( abs((f4UVWQ.w - 0.5)*2), 1/SunViewPower)/2 + 0.5;
     fCosSunViewAngle = cos(f4UVWQ.w*PI);
-#else
-    // Rescale to exactly 0,1 range
-    f4UVWQ = (f4UVWQ * PRECOMPUTED_SCTR_LUT_DIM - 0.5) / (PRECOMPUTED_SCTR_LUT_DIM-1);
-
-    // Allowable height range is limited to [SafetyHeightMargin, AtmTopHeight - SafetyHeightMargin] to
-    // avoid numeric issues at the Earth surface and the top of the atmosphere
-    fHeight = f4UVWQ.x * (g_MediaParams.fAtmTopHeight - 2*SafetyHeightMargin) + SafetyHeightMargin;
-
-    fCosViewZenithAngle = f4UVWQ.y * 2 - 1;
-    fCosSunZenithAngle  = f4UVWQ.z * 2 - 1;
-    fCosSunViewAngle    = f4UVWQ.w * 2 - 1;
-#endif
 
     fCosViewZenithAngle = clamp(fCosViewZenithAngle, -1, +1);
     fCosSunZenithAngle  = clamp(fCosSunZenithAngle,  -1, +1);
@@ -354,14 +333,7 @@ void InsctrLUTCoords2WorldParams(in float4 f4UVWQ,
     // view zenith and sun zenith angles
     float D = (1.0 - fCosViewZenithAngle * fCosViewZenithAngle) * (1.0 - fCosSunZenithAngle  * fCosSunZenithAngle);
     
-    // !!!!  IMPORTANT NOTE regarding NVIDIA hardware !!!!
-
-    // There is a very weird issue on NVIDIA hardware with clamp(), saturate() and min()/max() 
-    // functions. No matter what function is used, fCosViewZenithAngle and fCosSunZenithAngle
-    // can slightly fall outside [-1,+1] range causing D to be negative
-    // Using saturate(D), max(D, 0) and even D>0?D:0 does not work!
-    // The only way to avoid taking the square root of negative value and obtaining NaN is 
-    // to use max() with small positive value:
+    // !!!!
     D = sqrt( max(D, 1e-20) );
     
     float2 f2MinMaxCosSunViewAngle = fCosViewZenithAngle*fCosSunZenithAngle + float2(-D, +D);
@@ -373,7 +345,7 @@ void InsctrLUTCoords2WorldParams(in float4 f4UVWQ,
 
 
 
-
+ 
 
 
 

@@ -7,62 +7,134 @@ in vec2 fragmentCoordinate;
 // Ouput data
 out vec3 color;
 
-float random (in vec2 _st) {
-    return fract(sin(dot(_st.xy,
-                         vec2(12.9898,78.233)))*
-        43758.5453123);
+
+/*
+ *  GLOBAL VARIABLES: 
+ *  ================  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ */
+
+#define OPTICAL_DEPTH_LUT_DIM vec4(64,32,64,32)
+
+float _fCloudAltitude      = 3000.f;
+float _fCloudThickness     =  700.f;
+float _fAttenuationCoeff   =  0.07f; // Typical scattering coefficient lies in the range 0.01 - 0.1 m^-1
+float _fParticleCutOffDist =  2e+5f;
+// g_GlobalCloudAttribs.
+float _fEarthRadius     = 6360000.f;
+
+/*
+ *  STRUCTURES: 
+ *  ==========  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ */
+struct SCloudCellAttribs{
+    vec3  f3Center;
+    float fSize;
+
+    vec3 f3Normal;
+    uint uiNumActiveLayers;
+
+    vec3  f3Tangent;
+    float fDensity;
+
+    vec3  f3Bitangent;
+    float fMorphFadeout;
+
+    uint uiPackedLocation;
+};
+
+struct SParticleAttribs{
+    vec3  f3Pos;
+    float fSize;
+    float fRndAzimuthBias;
+    float fDensity;
+};
+
+struct SCloudParticleLighting{
+    vec4 f4SunLight;
+	vec2 f2SunLightAttenuation; // x ==   Direct Sun Light Attenuation
+							    // y == Indirect Sun Light Attenuation
+    vec4 f4AmbientLight;
+};
+
+
+/*
+ * COMPUTE PARTICLES:
+ * =================  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *
+ * This function computes different attributes of a particle which will be used
+ * for rendering
+ *
+ */
+void ComputeParticleRenderAttribs(  const in SParticleAttribs       ParticleAttrs,
+                                    const in SCloudCellAttribs      CellAttrs,
+                                          in SCloudParticleLighting ParticleLighting, 
+                                    in vec3  f3CameraPos,
+                                    in vec3  f3ViewRay,
+                                    in vec3  f3EntryPointUSSpace, // Ray entry point in unit sphere (US) space
+                                    in vec3  f3ViewRayUSSpace,    // View direction in unit sphere (US) space
+                                    in vec3  f3LightDirUSSpace,   // Light direction in unit sphere (US) space
+                                    in float fDistanceToExitPoint,
+                                    in float fDistanceToEntryPoint,
+                                    out vec4 f4Color
+                                ){
+    vec3 f3EntryPointWS = f3CameraPos + fDistanceToEntryPoint * f3ViewRay;
+    vec3 f3ExitPointWS  = f3CameraPos +  fDistanceToExitPoint * f3ViewRay;
+
+	// Compute look-up coordinates
+    vec4 f4LUTCoords;
+    WorldParamsToOpticalDepthLUTCoords(f3EntryPointUSSpace, f3ViewRayUSSpace, f4LUTCoords);
+
+    // Randomly rotate the sphere
+    f4LUTCoords.y += ParticleAttrs.fRndAzimuthBias;
+
+    float fLOD = 0;//log2( 256.f / (ParticleAttrs.fSize / max(fDistanceToEntryPoint,1) * _fBackBufferWidth)  );
+
+	// Get the normalized density along the view ray
+    float fNormalizedDensity = 1.f;
+    SAMPLE_4D_LUT(g_tex3DParticleDensityLUT, OPTICAL_DEPTH_LUT_DIM, f4LUTCoords, fLOD, fNormalizedDensity); // ---------------------------------------------------------- Tex
+
+	// Compute actual cloud mass by multiplying normalized density with ray length
+    fCloudMass = fNormalizedDensity * (fDistanceToExitPoint - fDistanceToEntryPoint);
+    float fFadeOutDistance = _fParticleCutOffDist * g_fParticleToFlatMorphRatio;
+    float fFadeOutFactor = saturate( (_fParticleCutOffDist - fDistanceToEntryPoint) /  max(fFadeOutDistance,1) );
+    fCloudMass *= fFadeOutFactor * CellAttrs.fMorphFadeout;
+    fCloudMass *= ParticleAttrs.fDensity;
+
+	// Compute transparency
+    fTransparency = exp( -fCloudMass * _fAttenuationCoeff );
+    
+	// Evaluate phase function for single scattering
+	float fCosTheta = dot(-f3ViewRayUSSpace, f3LightDirUSSpace);
+	float PhaseFunc = HGPhaseFunc(fCosTheta, 0.8);
+
+	vec2 f2SunLightAttenuation = ParticleLighting.f2SunLightAttenuation;
+	vec3 f3SingleScattering =  fTransparency *  ParticleLighting.f4SunLight.xyz * f2SunLightAttenuation.x * PhaseFunc * pow(CellAttrs.fMorphFadeout,2);
+
+    // Multiple Scattering
+	vec4  f4MultipleScatteringLUTCoords = WorldParamsToParticleScatteringLUT(f3EntryPointUSSpace, f3ViewRayUSSpace, f3LightDirUSSpace, true);
+    float fMultipleScattering = g_tex3DMultipleScatteringInParticleLUT.SampleLevel(samLinearWrap, f4MultipleScatteringLUTCoords.xyz, 0); // ---------------------------------------------------------- Tex
+	vec3  f3MultipleScattering = (1-fTransparency) * fMultipleScattering * f2SunLightAttenuation.y * ParticleLighting.f4SunLight.xyz;
+
+	// Compute ambient light
+	vec3 f3EarthCentre = vec3(0, -_fEarthRadius, 0);
+	float fEnttryPointAltitude = length(f3EntryPointWS - f3EarthCentre);
+	float fCloudBottomBoundary = _fEarthRadius + _fCloudAltitude - _fCloudThickness/2.f;
+	float fAmbientStrength     =  (fEnttryPointAltitude - fCloudBottomBoundary) /  _fCloudThickness;//(1-fNoise)*0.5;//0.3;
+	fAmbientStrength = clamp(fAmbientStrength, 0.3, 1.0);
+	vec3 f3Ambient = (1-fTransparency) * fAmbientStrength * ParticleLighting.f4AmbientLight.xyz;
+
+	// Compose color
+	f4Color.xyz = 0;
+	const float fSingleScatteringScale = 0.2;
+	f4Color.xyz += f3SingleScattering * fSingleScatteringScale;
+	f4Color.xyz += f3MultipleScattering * PI;
+	f4Color.xyz += f3Ambient;
+	f4Color.xyz *= 2;
+
+    f4Color.w = fTransparency;
 }
 
-// Based on Morgan McGuire @morgan3d
-// https://www.shadertoy.com/view/4dS3Wd
-float noise (in vec2 _st) {
-    vec2 i = floor(_st);
-    vec2 f = fract(_st);
 
-    // Four corners in 2D of a tile
-    float a = random(i);
-    float b = random(i + vec2(1.0, 0.0));
-    float c = random(i + vec2(0.0, 1.0));
-    float d = random(i + vec2(1.0, 1.0));
-
-    vec2 u = f * f * (3.0 - 2.0 * f);
-
-    return mix(a, b, u.x) +
-            (c - a)* u.y * (1.0 - u.x) +
-            (d - b) * u.x * u.y;
-}
-
-#define NUM_OCTAVES 10
-
-float fbm ( in vec2 _st) {
-    float v = 0.0;
-    float a = 0.5;
-    vec2 shift = vec2(100);
-    // Rotate to reduce axial bias
-
-    mat2 rot = mat2( cos(0.5), sin(0.5),
-                    -sin(0.5), cos(0.5));
-    for (int i = 0; i < NUM_OCTAVES; ++i) {
-        v += a * noise(_st);
-        _st = rot * _st * 2.0 + shift;
-        a *= 0.5;
-    }
-    return v;
-}
-
-void main() {
-    vec2 st = gl_FragCoord.xy/vec2(1024.0,768.0);
-	//vec2 st = gl_FragCoord.xy/vec2(1024.0,768.0);//u_resolution.xy;
-    st.x *= 1024.0f/768.0f;//u_resolution.x/u_resolution.y;
-
-
-	//fragmentCoordinate.x = fragmentCoordinate.x/36.0;
-	//fragmentCoordinate.y = fragmentCoordinate.y/36.0;
-	vec2 coord = fragmentCoordinate /50.0;
-
-    vec3 rawcolor = vec3(0.0);
-	rawcolor += fbm(coord*5.0);
-	
-    //gl_FragColor = vec4(color,1.0);
-	color =rawcolor;// vec3(0.5, 0.0 ,0.0 );//rawcolor;//rawcolor;
+void main() {    
+	color = vec3(0.5, 0.0 ,0.0 );//rawcolor;//rawcolor;
 }
