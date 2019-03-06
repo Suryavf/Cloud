@@ -15,6 +15,22 @@ out vec3 color;
 
 #define OPTICAL_DEPTH_LUT_DIM vec4(64,32,64,32)
 
+#define SAMPLE_4D_LUT(tex3DLUT, LUT_DIM, f4LUTCoords, fLOD, Result){ \
+    vec3  f3UVW;                                                \
+    f3UVW.xy = f4LUTCoords.xy;                                  \
+    float fQSlice = f4LUTCoords.w * LUT_DIM.w - 0.5;            \
+    float fQ0Slice = floor(fQSlice);                            \
+    float fQWeight = fQSlice - fQ0Slice;                        \
+                                                                \
+    f3UVW.z = (fQ0Slice + f4LUTCoords.z) / LUT_DIM.w;           \
+                                                                \
+    Result = lerp(                                              \
+        tex3DLUT.SampleLevel(samLinearWrap, f3UVW, fLOD),                                   \  // ---------------------------------------------------------- Tex
+        /* frac() assures wraparound filtering of w coordinate*/                            \
+        tex3DLUT.SampleLevel(samLinearWrap, frac(f3UVW + float3(0,0,1/LUT_DIM.w)), fLOD),   \  // ---------------------------------------------------------- Tex
+        fQWeight);                                                                          \
+}
+
 float _fCloudAltitude      = 3000.f;
 float _fCloudThickness     =  700.f;
 float _fAttenuationCoeff   =  0.07f; // Typical scattering coefficient lies in the range 0.01 - 0.1 m^-1
@@ -87,11 +103,24 @@ void ComputeParticleRenderAttribs(  const in SParticleAttribs       ParticleAttr
     // Randomly rotate the sphere
     f4LUTCoords.y += ParticleAttrs.fRndAzimuthBias;
 
-    float fLOD = 0;//log2( 256.f / (ParticleAttrs.fSize / max(fDistanceToEntryPoint,1) * _fBackBufferWidth)  );
-
 	// Get the normalized density along the view ray
     float fNormalizedDensity = 1.f;
-    SAMPLE_4D_LUT(g_tex3DParticleDensityLUT, OPTICAL_DEPTH_LUT_DIM, f4LUTCoords, fLOD, fNormalizedDensity); // ---------------------------------------------------------- Tex
+/*
+#define SAMPLE_4D_LUT(tex3D, LUT_DIM, f4LUTCoords, fLOD, Result){   \
+    vec3  f3UVW;                                                    \
+    f3UVW.xy = f4LUTCoords.xy;                                      \
+    float fQSlice = f4LUTCoords.w * LUT_DIM.w - 0.5;                \
+    float fQ0Slice = floor(fQSlice);                                \
+    float fQWeight = fQSlice - fQ0Slice;                            \
+                                                                    \
+    f3UVW.z = (fQ0Slice + f4LUTCoords.z) / LUT_DIM.w;               \
+                                                                    \
+    Result = mix(  texture(tex3D,      f3UVW                            ).rgb,  \  // ---------------------------------------------------------- Tex
+                   texture(tex3D, frac(f3UVW + float3(0,0,1/LUT_DIM.w)) ).rgb,  \  // ---------------------------------------------------------- Tex
+                   fQWeight);                                                   \
+}
+*/
+    SAMPLE_4D_LUT(g_tex3DParticleDensityLUT, OPTICAL_DEPTH_LUT_DIM, f4LUTCoords, 0, fNormalizedDensity); // ---------------------------------------------------------- Tex
 
 	// Compute actual cloud mass by multiplying normalized density with ray length
     fCloudMass = fNormalizedDensity * (fDistanceToExitPoint - fDistanceToEntryPoint);
@@ -135,6 +164,10 @@ void ComputeParticleRenderAttribs(  const in SParticleAttribs       ParticleAttr
 }
 
 
+/*
+ *  MAIN FUNC: 
+ *  =========  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ */
 void main() {    
 	color = vec3(0.5, 0.0 ,0.0 );//rawcolor;//rawcolor;
 }
