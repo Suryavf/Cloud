@@ -15,9 +15,15 @@ uniform sampler3D g_tex3DMultipleScatteringInParticleLUT;
  *  GLOBAL VARIABLES: 
  *  ================  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
-#define OPTICAL_DEPTH_LUT_DIM vec4(64,32,64,32)
-#define PARTICLE_SCALE_HEIGHT vec2(7994.f,1200.f)
-#define EARTH_RADIUS          6360000.f
+#define PI                              3.1415928f
+#define FLT_MAX                   3.402823466e+38f
+#define EARTH_RADIUS                     6360000.f
+#define ATM_TOP_HEIGHT                     80000.f
+#define ATM_TOP_RADIUS                     (EARTH_RADIUS+ATM_TOP_HEIGHT)
+#define OPTICAL_DEPTH_LUT_DIM              vec4(64,32,64,32)
+#define PARTICLE_SCALE_HEIGHT              vec2(7994.f,1200.f)
+#define SRF_SCATTERING_IN_PARTICLE_LUT_DIM vec3(32,64,16)
+#define VOL_SCATTERING_IN_PARTICLE_LUT_DIM vec4(32,64,32,8)
 
 #define SAMPLE_4D_LUT(tex3D, LUT_DIM, f4LUTCoords, Result){   \
     vec3  f3UVW;                                                    \
@@ -28,18 +34,20 @@ uniform sampler3D g_tex3DMultipleScatteringInParticleLUT;
                                                                     \
     f3UVW.z = (fQ0Slice + f4LUTCoords.z) / LUT_DIM.w;               \
                                                                     \
-    Result = mix(  texture3D(tex3D,      f3UVW                            ).r,  \ 
-                   texture3D(tex3D, frac(f3UVW + float3(0,0,1/LUT_DIM.w)) ).r,  \ 
-                   fQWeight);                                                   \
+    Result = mix(  texture3D(tex3D,      f3UVW                          ).r,  \ 
+                   texture3D(tex3D, frac(f3UVW + vec3(0,0,1/LUT_DIM.w)) ).r,  \ 
+                   fQWeight);                                                 \
 }
 
 float _fCloudAltitude      = 3000.f;
 float _fCloudThickness     =  700.f;
 float _fAttenuationCoeff   =  0.07f; // Typical scattering coefficient lies in the range 0.01 - 0.1 m^-1
 float _fParticleCutOffDist =  2e+5f;
-// g_GlobalCloudAttribs.
 float _fEarthRadius     = 6360000.f;
 
+// Fraction of the particle cut off distance which serves as
+// a transition region from particles to flat clouds
+static const float g_fParticleToFlatMorphRatio = 0.2;
 
 /*
  *  STRUCTURES: 
@@ -80,6 +88,48 @@ struct SCloudParticleLighting{
  *  GENERAL: 
  *  =======  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
+
+// Computes the zenith and azimuth angles in XZY (Y Up) coordinate system from direction
+void DirectionToZenithAzimuthAngleXZY(in vec3 f3Direction, out float fZenithAngle, out float fAzimuthAngle){
+    float fZenithCos = f3Direction.y;
+    fZenithAngle = acos(fZenithCos);
+    //float fZenithSin = sqrt( max(1 - fZenithCos*fZenithCos, 1e-10) );
+    float fAzimuthCos = f3Direction.x;// / fZenithSin;
+    float fAzimuthSin = f3Direction.z;// / fZenithSin;
+    fAzimuthAngle = atan2(fAzimuthSin, fAzimuthCos);
+}
+
+// Constructs local XYZ (Z Up) frame from Up and Inward vectors
+void ConstructLocalFrameXYZ(in vec3 f3Up, in vec3 f3Inward, out vec3 f3X, out vec3 f3Y, out vec3 f3Z){
+    //      Z (Up)
+    //      |    Y  (Inward)
+    //      |   /
+    //      |  /
+    //      | /  
+    //      |/
+    //       -----------> X
+    //
+    f3Z = normalize(f3Up);
+    f3X = normalize(cross(f3Inward, f3Z));
+    f3Y = normalize(cross(f3Z, f3X));
+}
+
+// Computes zenith and azimuth angles in local XYZ (Z Up) frame from the direction
+void ComputeLocalFrameAnglesXYZ(in  vec3  f3LocalX, 
+                                in  vec3  f3LocalY, 
+                                in  vec3  f3LocalZ,
+                                in  vec3  f3RayDir,
+                                out float fLocalZenithAngle,
+                                out float fLocalAzimuthAngle){
+    fLocalZenithAngle = acos(saturate( dot(f3LocalZ, f3RayDir) ));
+
+    // Compute azimuth angle in the local frame
+    float fViewDirLocalAzimuthCos = dot(f3RayDir, f3LocalX);
+    float fViewDirLocalAzimuthSin = dot(f3RayDir, f3LocalY);
+    fLocalAzimuthAngle = atan2(fViewDirLocalAzimuthSin, fViewDirLocalAzimuthCos);
+}
+
+
 
 // GetRaySphereIntersection
 // ........................
@@ -192,7 +242,6 @@ float GetCosHorizonAnlge(float fHeight){
     return -sqrt(fHeight * (2*EARTH_RADIUS + fHeight) ) / (EARTH_RADIUS + fHeight);
 }
 
-
 float ZenithAngle2TexCoord(float fCosZenithAngle, float fHeight, in float fTexDim, float power, float fPrevTexCoord){
     fCosZenithAngle = fCosZenithAngle;
     float fTexCoord;
@@ -237,8 +286,143 @@ float ZenithAngle2TexCoord(float fCosZenithAngle, float fHeight, in float fTexDi
     return fTexCoord;
 }
 
+float HGPhaseFunc(in float fCosTheta, in const float g = 0.9){
+    return (1/(4*PI) * (1 - g*g)) / pow( max((1 + g*g) - (2*g)*fCosTheta,0), 3.f/2.f);
+}
 
 
+
+
+
+
+
+
+
+void WorldParamsToOpticalDepthLUTCoords(in vec3 f3NormalizedStartPos, in vec3 f3RayDir, out vec4 f4LUTCoords){
+    
+    DirectionToZenithAzimuthAngleXZY(f3NormalizedStartPos, f4LUTCoords.x, f4LUTCoords.y);
+
+    vec3 f3LocalX, f3LocalY, f3LocalZ;
+    // Construct local tangent frame for the start point on the sphere (z up)
+    // For convinience make the Z axis look into the sphere
+    ConstructLocalFrameXYZ( -f3NormalizedStartPos, vec3(0,1,0), f3LocalX, f3LocalY, f3LocalZ);
+
+    // z coordinate is the angle between the ray direction and the local frame zenith direction
+    // Note that since we are interested in rays going inside the sphere only, the allowable
+    // range is [0, PI/2]
+
+    float fRayDirLocalZenith, fRayDirLocalAzimuth;
+    ComputeLocalFrameAnglesXYZ(f3LocalX, f3LocalY, f3LocalZ, f3RayDir, fRayDirLocalZenith, fRayDirLocalAzimuth);
+    f4LUTCoords.z = fRayDirLocalZenith;
+    f4LUTCoords.w = fRayDirLocalAzimuth;
+
+    f4LUTCoords.xyzw = f4LUTCoords.xyzw / vec4(PI, 2*PI, PI/2, 2*PI) + vec4(0.0, 0.5, 0, 0.5);
+
+    // Clamp only zenith (yz) coordinate as azimuth is filtered with wraparound mode
+    f4LUTCoords.xz = clamp(f4LUTCoords, 0.5/OPTICAL_DEPTH_LUT_DIM, 1.0-0.5/OPTICAL_DEPTH_LUT_DIM).xz;
+
+}
+
+
+// All parameters must be defined in the unit sphere (US) space
+vec4 WorldParamsToParticleScatteringLUT( in vec3 f3StartPosUSSpace, 
+                                         in vec3 f3ViewDirInUSSpace, 
+                                         in vec3 f3LightDirInUSSpace,
+                                         in uniform bool bSurfaceOnly){
+    vec4 f4LUTCoords = 0;
+
+    float fDistFromCenter = 0;
+    if( !bSurfaceOnly ){
+        // Compute distance from center and normalize start position
+        fDistFromCenter = length(f3StartPosUSSpace);
+        f3StartPosUSSpace /= max(fDistFromCenter, 1e-5);
+    }
+    float fStartPosZenithCos = dot(f3StartPosUSSpace, f3LightDirInUSSpace);
+    f4LUTCoords.x = acos(fStartPosZenithCos);
+
+    vec3 f3LocalX, f3LocalY, f3LocalZ;
+    ConstructLocalFrameXYZ(-f3StartPosUSSpace, f3LightDirInUSSpace, f3LocalX, f3LocalY, f3LocalZ);
+
+    float fViewDirLocalZenith, fViewDirLocalAzimuth;
+    ComputeLocalFrameAnglesXYZ(f3LocalX, f3LocalY, f3LocalZ, f3ViewDirInUSSpace, fViewDirLocalZenith, fViewDirLocalAzimuth);
+    f4LUTCoords.y = fViewDirLocalAzimuth;
+    f4LUTCoords.z = fViewDirLocalZenith;
+    
+    // In case the parameterization is performed for the sphere surface, the allowable range for the 
+    // view direction zenith angle is [0, PI/2] since the ray should always be directed into the sphere.
+    // Otherwise the range is whole [0, PI]
+    f4LUTCoords.xyz = f4LUTCoords.xyz / vec3(PI, 2*PI, bSurfaceOnly ? (PI/2) : PI) + vec3(0, 0.5, 0);
+    if( bSurfaceOnly )
+        f4LUTCoords.w = 0;
+    else
+        f4LUTCoords.w = fDistFromCenter;
+    if( bSurfaceOnly )
+        f4LUTCoords.xz = clamp(f4LUTCoords.xyz, 0.5/SRF_SCATTERING_IN_PARTICLE_LUT_DIM, 1-0.5/SRF_SCATTERING_IN_PARTICLE_LUT_DIM).xz;
+    else
+        f4LUTCoords.xzw = clamp(f4LUTCoords, 0.5/VOL_SCATTERING_IN_PARTICLE_LUT_DIM, 1-0.5/VOL_SCATTERING_IN_PARTICLE_LUT_DIM).xzw;
+
+    return f4LUTCoords;
+}
+
+
+
+/*
+ *  SINGLE SCATTERING: 
+ *  =================  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ */
+ 
+// This shader pre-computes the radiance of single scattering at a given point in given
+// direction.
+/*
+vec3 PrecomputeSingleScatteringPS(){
+    // Get attributes for the current point
+    vec2 f2UV = ProjToUV(In.m_f2PosPS);
+    float fHeight, fCosViewZenithAngle, fCosSunZenithAngle, fCosSunViewAngle;
+    InsctrLUTCoords2WorldParams(vec4(f2UV, g_MiscParams.f2WQ), fHeight, fCosViewZenithAngle, fCosSunZenithAngle, fCosSunViewAngle );
+    vec3 f3EarthCentre =  - vec3(0,1,0) * EARTH_RADIUS;
+    vec3 f3RayStart    = vec3(0, fHeight, 0);
+    vec3 f3ViewDir     = ComputeViewDir (fCosViewZenithAngle);
+    vec3 f3DirOnLight  = ComputeLightDir(f3ViewDir, fCosSunZenithAngle, fCosSunViewAngle);
+  
+    // Intersect view ray with the top of the atmosphere and the Earth
+    vec4 f4Isecs;
+    GetRaySphereIntersection2( f3RayStart, f3ViewDir, f3EarthCentre, 
+                               vec2(EARTH_RADIUS, ATM_TOP_RADIUS), 
+                               f4Isecs);
+    vec2 f2RayEarthIsecs  = f4Isecs.xy;
+    vec2 f2RayAtmTopIsecs = f4Isecs.zw;
+
+    if(f2RayAtmTopIsecs.y <= 0)
+        return 0; // This is just a sanity check and should never happen
+                  // as the start point is always under the top of the 
+                  // atmosphere (look at InsctrLUTCoords2WorldParams())
+
+    // Set the ray length to the distance to the top of the atmosphere
+    float fRayLength = f2RayAtmTopIsecs.y;
+    // If ray hits Earth, limit the length by the distance to the surface
+    if(f2RayEarthIsecs.x > 0)
+        fRayLength = min(fRayLength, f2RayEarthIsecs.x);
+    
+    vec3 f3RayEnd = f3RayStart + f3ViewDir * fRayLength;
+
+    float fCloudTransparency =  1      ;
+    float fDitToCloud        = +FLT_MAX;
+    // Integrate single-scattering
+    vec3 f3Inscattering, f3Extinction;
+    IntegrateUnshadowedInscattering(f3RayStart, 
+                                    f3RayEnd,
+                                    f3ViewDir,
+                                    f3EarthCentre,
+                                    f3DirOnLight.xyz,
+                                    100,
+                                    f3Inscattering,
+                                    f3Extinction,
+                                    fCloudTransparency,
+                                    fDitToCloud);
+
+    return f3Inscattering;
+}
+*/
 
 /*
  * COMPUTE PARTICLES:
@@ -299,7 +483,7 @@ void ComputeParticleRenderAttribs(  const in SParticleAttribs       ParticleAttr
 	vec3  f3MultipleScattering = (1-fTransparency) * fMultipleScattering * f2SunLightAttenuation.y * ParticleLighting.f4SunLight.xyz;
 
 	// Compute ambient light
-	vec3 f3EarthCentre = vec3(0, -_fEarthRadius, 0);
+	vec3  f3EarthCentre = vec3(0, -_fEarthRadius, 0);
 	float fEnttryPointAltitude = length(f3EntryPointWS - f3EarthCentre);
 	float fCloudBottomBoundary = _fEarthRadius + _fCloudAltitude - _fCloudThickness/2.f;
 	float fAmbientStrength     =  (fEnttryPointAltitude - fCloudBottomBoundary) /  _fCloudThickness;//(1-fNoise)*0.5;//0.3;
