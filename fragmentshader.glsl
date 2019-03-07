@@ -52,6 +52,8 @@ float _fAttenuationCoeff   =  0.07f; // Typical scattering coefficient lies in t
 float _fParticleCutOffDist =  2e+5f;
 float _fEarthRadius     = 6360000.f;
 
+vec3  _f3ExtraterrestrialSunColor(10.0f,10.0f,10.0f);
+
 // Fraction of the particle cut off distance which serves as
 // a transition region from particles to flat clouds
 static const float g_fParticleToFlatMorphRatio = 0.2;
@@ -472,7 +474,7 @@ void main() {
     // Multiple Scattering
 	vec4  f4MultipleScatteringLUTCoords = WorldParamsToParticleScatteringLUT(f3EntryPointUSSpace, f3ViewRayUSSpace, f3LightDirUSSpace);
 
-    float fMultipleScattering = texture3D(g_tex3DMultipleScatteringInParticleLUT,  f4MultipleScatteringLUTCoords.xyz).r; 
+    float fMultipleScattering = texture3D(g_tex3DMultipleScatteringInParticleLUT,  f4MultipleScatteringLUTCoords.xyz).r; //-------------------------- Tex
 	vec3  f3MultipleScattering = (1-fTransparency) * fMultipleScattering * f2SunLightAttenuation.y * ParticleLighting.f4SunLight.xyz; // +++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 	// Compute ambient light
