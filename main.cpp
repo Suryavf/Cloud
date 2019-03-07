@@ -25,6 +25,26 @@ using namespace glm;
 #include "common/controls.hpp"
 #include "sphere.h"
 
+#include <iostream>
+#include <chrono>
+
+class Timer
+{
+public:
+    Timer() : beg_(clock_::now()) {}
+    void reset() { beg_ = clock_::now(); }
+    double elapsed() const { 
+        return std::chrono::duration_cast<second_>
+            (clock_::now() - beg_).count(); }
+
+private:
+    typedef std::chrono::high_resolution_clock clock_;
+    typedef std::chrono::duration<double, std::ratio<1> > second_;
+    std::chrono::time_point<clock_> beg_;
+};
+
+
+
 // Textures 
 GLuint texOpticalDepthID;
 cudaGraphicsResource *cudaOpticalDepthResource;
@@ -123,6 +143,7 @@ int main(void){
  */
 	// Get a handle for our "MVP" uniform
 	GLuint MatrixID = glGetUniformLocation(programID, "MVP");
+	GLuint   TimeID = glGetUniformLocation(programID, "Time");
 
 /*    
  *  Create Sphere. 3D vertex
@@ -243,6 +264,8 @@ int main(void){
  *  OpenGL Loop!
  *  ============
  */
+	Timer tmr;
+	float time;
 	do{
 	  /*
 	   °Basic operations
@@ -307,6 +330,10 @@ int main(void){
 			0,                                // stride
 			(void*)0                          // array buffer offset
 		);
+		
+		// Pass time
+		time = float(tmr.elapsed());
+		glUniform1f(TimeID,time);
 
 		// Draw the triangle !
 		glDrawArrays(GL_TRIANGLES, 0, sphr.getGLVertexCount()); // 12*3 indices starting at 0 -> 12 triangles

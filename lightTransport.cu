@@ -1,26 +1,14 @@
 #include "lightTransport.h"
 
-#ifndef OPTICAL_DEPTH_LUT_DIM
-#   define OPTICAL_DEPTH_LUT_DIM float4(64,32,64,32)
-#endif
+#define OPTICAL_DEPTH_LUT_DIM float4(64,32,64,32)
+#define NUM_PARTICLE_LAYERS 1
 
-#ifndef NUM_PARTICLE_LAYERS
-#   define NUM_PARTICLE_LAYERS 1
-#endif
-
-#ifndef SRF_SCATTERING_IN_PARTICLE_LUT_DIM
-#   define SRF_SCATTERING_IN_PARTICLE_LUT_DIM float3(32,64,16)
-#endif
-
-#ifndef VOL_SCATTERING_IN_PARTICLE_LUT_DIM
-#   define VOL_SCATTERING_IN_PARTICLE_LUT_DIM float4(32,64,32,8)
-#endif
-
-#ifndef THREAD_GROUP_SIZE
-#   define THREAD_GROUP_SIZE 64
-#endif
-
+#define SRF_SCATTERING_IN_PARTICLE_LUT_DIM float3(32,64,16)
+#define VOL_SCATTERING_IN_PARTICLE_LUT_DIM float4(32,64,32,8)
+#define THREAD_GROUP_SIZE 64
 #define NUM_INTEGRATION_STEPS 64
+#define PI                              3.1415928f
+
 
 //Global scope surface to bind to
 surface<void, cudaSurfaceType3D> surfaceOpticalDepthWrite;
@@ -30,8 +18,17 @@ surface<void, cudaSurfaceType3D>   surfaceScatteringWrite;
  *  GENERAL: Device functions
  *  =======  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
- __device__ void spherical2cartesian(){
 
+__device__ float dot(float3 a, float3 b){
+    return a.x*b.x + a.y*b.y + a.z*b.z;
+}
+
+__device__ float3 normalize(float3 v){
+    return rsqrt(dot(v,v))*v;
+}
+
+__device__ float3 cross(float3 a, float3 b){
+  return a.yzx * b.zxy - a.zxy * b.yzx;
 }
 
 // Computes direction from the zenith and azimuth angles in XZY (Y Up) coordinate system
@@ -48,8 +45,8 @@ __device__ float3 ZenithAzimuthAngleToDirectionXZY(float zenithAngle, float azim
     //   Z       \'
 
     float zenithSin, zenithCos, azimuthSin, azimuthCos;
-    sincos( zenithAngle,  zenithSin,  zenithCos);
-    sincos(azimuthAngle, azimuthSin, azimuthCos);
+    sincosf( zenithAngle,  &zenithSin,  &zenithCos);
+    sincosf(azimuthAngle, &azimuthSin, &azimuthCos);
 
     float3 direction;
     direction.y = zenithCos;
@@ -95,15 +92,14 @@ __device__ float3 GetDirectionInLocalFrameXYZ(float3 localX,
                                               float  localAzimuthAngle){
     // Compute sin and cos of the angle between ray direction and local zenith
     float dirLocalSinZenithAngle, dirLocalCosZenithAngle;
-    sincos(localZenithAngle, dirLocalSinZenithAngle, dirLocalCosZenithAngle);
+    sincosf(localZenithAngle, &dirLocalSinZenithAngle, &dirLocalCosZenithAngle);
 
     // Compute sin and cos of the local azimuth angle
     float dirLocalAzimuthCos, dirLocalAzimuthSin;
-    sincos(localAzimuthAngle, dirLocalAzimuthSin, dirLocalAzimuthCos);
+    sincosf(localAzimuthAngle, &dirLocalAzimuthSin, &dirLocalAzimuthCos);
     
     // Reconstruct view ray
-    return localZ * dirLocalCosZenithAngle + 
-           dirLocalSinZenithAngle * (dirLocalAzimuthCos * localX + dirLocalAzimuthSin * localY );
+    return localZ * dirLocalCosZenithAngle + dirLocalSinZenithAngle * (dirLocalAzimuthCos * localX + dirLocalAzimuthSin * localY );
 }
 
 // Computes zenith and azimuth angles in local XYZ (Z Up) frame from the direction
@@ -125,7 +121,7 @@ __device__ void ComputeLocalFrameAnglesXYZ( float3 &localX,
 // Get Ray Sphere Intersection
 // http://wiki.cgsociety.org/index.php/Ray_Sphere_Intersection
 __device__ void GetRaySphereIntersection(float3 &rayOrigin,    float3 &rayDirection, 
-                                         float3 &sphereCenter, float  &sphereRadius
+                                         float3 &sphereCenter, float  &sphereRadius,
                                          float2 &intersections){
    rayOrigin -= sphereCenter;
    float A = dot(rayDirection, &rayDirection);
@@ -140,7 +136,7 @@ __device__ void GetRaySphereIntersection(float3 &rayOrigin,    float3 &rayDirect
    }
    else{
        D = sqrt(D);
-       intersections = float2(-B - D, -B + D) / (2*A); // A must be positive here!!
+       intersections = float2( (-B - D)/(2*A) , (-B + D)/(2*A) ); // A must be positive here!!
    }
 }
 
@@ -157,7 +153,7 @@ __device__ float HGPhaseFunc(float cosTheta, const float g = 0.9){
  */
  
     /*+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-*/
-
+/*
  #define SAMPLE_4D_LUT(tex3DLUT, LUT_DIM, f4LUTCoords, fLOD, Result)  \
  {                                                               \
      float3 f3UVW;                                               \
@@ -169,8 +165,7 @@ __device__ float HGPhaseFunc(float cosTheta, const float g = 0.9){
      f3UVW.z = (fQ0Slice + f4LUTCoords.z) / LUT_DIM.w;           \
                                                                  \
      Result = lerp(                                              \
-         tex3DLUT.SampleLevel(samLinearWrap, f3UVW, fLOD),       \
-         /* frac() assures wraparound filtering of w coordinate*/                            \
+         tex3DLUT.SampleLevel(samLinearWrap, f3UVW, fLOD),       \                          \
          tex3DLUT.SampleLevel(samLinearWrap, frac(f3UVW + float3(0,0,1/LUT_DIM.w)), fLOD),   \
          fQWeight);                                                                          \
  }
@@ -240,9 +235,9 @@ float4 WorldParamsToParticleScatteringLUT(  in float3 f3StartPosUSSpace,
 
     return f4LUTCoords;
 }
-
+*/
 /*+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-*/
-
+/*
 
 // All noise functions are designed for values on integer scale.
 // They are tuned to avoid visible periodicity for both positive and
@@ -335,6 +330,7 @@ __device__ float2 PreComputeOpticalDepth(){
  *  SINGLE SCATTERING: Device functions
  *  =================  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
+ /*
 // float PrecomputeSingleSctrPS(SScreenSizeQuadVSOutput In)
 __device__ float PrecomputeSingleSctrPS(){
 
@@ -378,7 +374,7 @@ __device__ float PrecomputeSingleSctrPS(){
  
     return inscattering * stepLen * particleRadius;
  }
-
+*/
 
 
 
@@ -391,6 +387,7 @@ __device__ float PrecomputeSingleSctrPS(){
  *  MULTIPLE SCATTERING: Device functions
  *  ===================  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
+ /*
 
 //float GatherScatteringPS(SScreenSizeQuadVSOutput In) : SV_Target{
 __device__ float GatherScatteringPS(){
@@ -487,7 +484,7 @@ __device__ float ComputeScatteringOrderPS(){
     return inscattering * stepLen * particleRadius * g_GlobalCloudAttribs.fScatteringCoeff;
 }
 
-
+*/
 
 
 
