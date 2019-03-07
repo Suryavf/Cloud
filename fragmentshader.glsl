@@ -1,8 +1,8 @@
 #version 330 core
 
 // Interpolated values from the vertex shaders
-in vec3 fragmentColor;
 in vec2 fragmentCoordinate;
+in vec3 fragmentNoise;
 
 // Ouput data
 out vec3 color;
@@ -90,8 +90,6 @@ struct SCloudParticleLighting{
  *  =======  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 
-
-
 // Computes the zenith and azimuth angles in XZY (Y Up) coordinate system from direction
 void DirectionToZenithAzimuthAngleXZY(in vec3 f3Direction, out float fZenithAngle, out float fAzimuthAngle){
     float fZenithCos = f3Direction.y;
@@ -176,6 +174,58 @@ void GetRaySphereIntersection2(in vec3 f3RayOrigin,
     f4Intersections =   f2RealRootMask.xxyy * vec4(-B - D.x, -B + D.x, -B - D.y, -B + D.y) / (2*A) + 
                       (1-f2RealRootMask.xxyy) * NO_INTERSECTIONS.xyxy;
 }
+
+vec3 GetParticleScales(in float fSize, in float fNumActiveLayers){
+    vec3 f3Scales = fSize;
+    //if( fNumActiveLayers > 1 )
+    //    f3Scales.y = max(f3Scales.y, g_GlobalCloudAttribs.fCloudThickness/fNumActiveLayers);
+    f3Scales.y = min(f3Scales.y, _fCloudThickness/2.f);
+    return f3Scales;
+}
+
+// This helper function computes intersection of the view ray with the particle ellipsoid
+void IntersectRayWithParticle(const in SParticleAttribs ParticleAttrs,
+                              const in SCloudCellAttribs CellAttrs,
+                              const in float3 f3CameraPos, 
+                              const in float3 f3ViewRay,
+                              out vec2 f2RayIsecs,
+                              out vec3 f3EntryPointUSSpace, // Entry point in Unit Sphere (US) space
+                              out vec3 f3ViewRayUSSpace,    // View ray direction in Unit Sphere (US) space
+                              out vec3 f3LightDirUSSpace,   // Light direction in Unit Sphere (US) space
+                              out float fDistanceToEntryPoint,
+                              out float fDistanceToExitPoint){
+    // Construct local frame matrix
+    vec3 f3Normal    = CellAttrs.f3Normal.xyz;
+    vec3 f3Tangent   = CellAttrs.f3Tangent.xyz;
+    vec3 f3Bitangent = CellAttrs.f3Bitangent.xyz;
+    mat3 f3x3ObjToWorldSpaceRotation = mat3(f3Tangent, f3Normal, f3Bitangent); 
+    // World to obj space is inverse of the obj to world space matrix, which is simply transpose
+    // for orthogonal matrix:
+    mat3 f3x3WorldToObjSpaceRotation = transpose(f3x3ObjToWorldSpaceRotation); 
+    
+    // Compute camera location and view direction in particle's object space:
+    vec3 f3CamPosObjSpace  = f3CameraPos - ParticleAttrs.f3Pos;                         // --------------------------------------------------- ParticleAttrs.f3Pos
+         f3CamPosObjSpace  = mul(f3CamPosObjSpace, f3x3WorldToObjSpaceRotation);
+    vec3 f3ViewRayObjSpace = mul(f3ViewRay, f3x3WorldToObjSpaceRotation );
+    vec3 f3LightDirObjSpce = mul(-g_LightAttribs.f4DirOnLight.xyz, f3x3WorldToObjSpaceRotation ); // ------------------------------------- g_LightAttribs.f4DirOnLight
+
+    // Compute scales to transform ellipsoid into the unit sphere:
+    vec3 f3Scale = 1.f / GetParticleScales(ParticleAttrs.fSize, CellAttrs.uiNumActiveLayers); //------------------------------------------------- ParticleAttrs.fSize
+    
+    vec3 f3ScaledCamPosObjSpace;
+    f3ScaledCamPosObjSpace  = f3CamPosObjSpace*f3Scale;
+    f3ViewRayUSSpace  = normalize(f3ViewRayObjSpace*f3Scale);
+    f3LightDirUSSpace = normalize(f3LightDirObjSpce*f3Scale);
+
+    // Scale camera pos and view dir in obj space and compute intersection with the unit sphere:
+    GetRaySphereIntersection(f3ScaledCamPosObjSpace, f3ViewRayUSSpace, 0, 1.f, f2RayIsecs);
+
+    f3EntryPointUSSpace = f3ScaledCamPosObjSpace + f3ViewRayUSSpace*f2RayIsecs.x;
+
+    fDistanceToEntryPoint = length(f3ViewRayUSSpace/f3Scale) * f2RayIsecs.x;
+    fDistanceToExitPoint  = length(f3ViewRayUSSpace/f3Scale) * f2RayIsecs.y;
+}
+
 
 
 
@@ -368,65 +418,6 @@ vec4 WorldParamsToParticleScatteringLUT( in vec3 f3StartPosUSSpace,
 }
 
 
-
-/*
- *  SINGLE SCATTERING: 
- *  =================  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- */
- 
-// This shader pre-computes the radiance of single scattering at a given point in given
-// direction.
-/*
-vec3 PrecomputeSingleScatteringPS(){
-    // Get attributes for the current point
-    vec2 f2UV = ProjToUV(In.m_f2PosPS);
-    float fHeight, fCosViewZenithAngle, fCosSunZenithAngle, fCosSunViewAngle;
-    InsctrLUTCoords2WorldParams(vec4(f2UV, g_MiscParams.f2WQ), fHeight, fCosViewZenithAngle, fCosSunZenithAngle, fCosSunViewAngle );
-    vec3 f3EarthCentre =  - vec3(0,1,0) * EARTH_RADIUS;
-    vec3 f3RayStart    = vec3(0, fHeight, 0);
-    vec3 f3ViewDir     = ComputeViewDir (fCosViewZenithAngle);
-    vec3 f3DirOnLight  = ComputeLightDir(f3ViewDir, fCosSunZenithAngle, fCosSunViewAngle);
-  
-    // Intersect view ray with the top of the atmosphere and the Earth
-    vec4 f4Isecs;
-    GetRaySphereIntersection2( f3RayStart, f3ViewDir, f3EarthCentre, 
-                               vec2(EARTH_RADIUS, ATM_TOP_RADIUS), 
-                               f4Isecs);
-    vec2 f2RayEarthIsecs  = f4Isecs.xy;
-    vec2 f2RayAtmTopIsecs = f4Isecs.zw;
-
-    if(f2RayAtmTopIsecs.y <= 0)
-        return 0; // This is just a sanity check and should never happen
-                  // as the start point is always under the top of the 
-                  // atmosphere (look at InsctrLUTCoords2WorldParams())
-
-    // Set the ray length to the distance to the top of the atmosphere
-    float fRayLength = f2RayAtmTopIsecs.y;
-    // If ray hits Earth, limit the length by the distance to the surface
-    if(f2RayEarthIsecs.x > 0)
-        fRayLength = min(fRayLength, f2RayEarthIsecs.x);
-    
-    vec3 f3RayEnd = f3RayStart + f3ViewDir * fRayLength;
-
-    float fCloudTransparency =  1      ;
-    float fDitToCloud        = +FLT_MAX;
-    // Integrate single-scattering
-    vec3 f3Inscattering, f3Extinction;
-    IntegrateUnshadowedInscattering(f3RayStart, 
-                                    f3RayEnd,
-                                    f3ViewDir,
-                                    f3EarthCentre,
-                                    f3DirOnLight.xyz,
-                                    100,
-                                    f3Inscattering,
-                                    f3Extinction,
-                                    fCloudTransparency,
-                                    fDitToCloud);
-
-    return f3Inscattering;
-}
-*/
-
 /*
  * COMPUTE PARTICLES:
  * =================  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -447,8 +438,8 @@ void ComputeParticleRenderAttribs(  const in SParticleAttribs       ParticleAttr
                                     in float fDistanceToEntryPoint,
                                     out vec4 f4Color
                                 ){
-    vec3 f3EntryPointWS = f3CameraPos + fDistanceToEntryPoint * f3ViewRay;
-    vec3 f3ExitPointWS  = f3CameraPos +  fDistanceToExitPoint * f3ViewRay;
+    //vec3 f3EntryPointWS = f3CameraPos + fDistanceToEntryPoint * f3ViewRay;
+    //vec3 f3ExitPointWS  = f3CameraPos +  fDistanceToExitPoint * f3ViewRay;
 
 	// Compute look-up coordinates
     vec4 f4LUTCoords;
@@ -458,19 +449,21 @@ void ComputeParticleRenderAttribs(  const in SParticleAttribs       ParticleAttr
     f4LUTCoords.y += ParticleAttrs.fRndAzimuthBias;
 
 	// Get the normalized density along the view ray
-    float fNormalizedDensity = 1.f;
+    float fNormalizedDensity = 1.f;  ///***************************************************************************************************************************************
 
     SAMPLE_4D_LUT(g_tex3DParticleDensityLUT, OPTICAL_DEPTH_LUT_DIM, f4LUTCoords, fNormalizedDensity);
 
 	// Compute actual cloud mass by multiplying normalized density with ray length
+    /*
     fCloudMass = fNormalizedDensity * (fDistanceToExitPoint - fDistanceToEntryPoint);
     float fFadeOutDistance = _fParticleCutOffDist * g_fParticleToFlatMorphRatio;
     float fFadeOutFactor = saturate( (_fParticleCutOffDist - fDistanceToEntryPoint) /  max(fFadeOutDistance,1) );
     fCloudMass *= fFadeOutFactor * CellAttrs.fMorphFadeout;
     fCloudMass *= ParticleAttrs.fDensity;
+    */
 
 	// Compute transparency
-    fTransparency = exp( -fCloudMass * _fAttenuationCoeff );
+    fTransparency = exp( _fAttenuationCoeff );//exp( -fCloudMass * _fAttenuationCoeff );
     
 	// Evaluate phase function for single scattering
 	float fCosTheta = dot(-f3ViewRayUSSpace, f3LightDirUSSpace);
@@ -489,9 +482,9 @@ void ComputeParticleRenderAttribs(  const in SParticleAttribs       ParticleAttr
 	vec3  f3EarthCentre = vec3(0, -_fEarthRadius, 0);
 	float fEnttryPointAltitude = length(f3EntryPointWS - f3EarthCentre);
 	float fCloudBottomBoundary = _fEarthRadius + _fCloudAltitude - _fCloudThickness/2.f;
-	float fAmbientStrength     =  (fEnttryPointAltitude - fCloudBottomBoundary) /  _fCloudThickness;//(1-fNoise)*0.5;//0.3;
-	fAmbientStrength = clamp(fAmbientStrength, 0.3, 1.0);
-	vec3 f3Ambient = (1-fTransparency) * fAmbientStrength * ParticleLighting.f4AmbientLight.xyz;
+	float fAmbientStrength     = (fEnttryPointAltitude - fCloudBottomBoundary) /  _fCloudThickness;//(1-fNoise)*0.5;//0.3;
+	      fAmbientStrength     = clamp(fAmbientStrength, 0.3, 1.0);
+	vec3  f3Ambient            = (1-fTransparency) * fAmbientStrength * ParticleLighting.f4AmbientLight.xyz;
 
 	// Compose color
 	f4Color.xyz = 0;
@@ -546,9 +539,6 @@ void RenderCloudsPS(PS_Input In,
     if( f2RayIsecs.y < 0 || fRayLength < fDistanceToEntryPoint )
         discard;
     fDistanceToExitPoint = min(fDistanceToExitPoint, fRayLength);
-
-    float fCloudMass;
-    float fIsecLenUSSpace = f2RayIsecs.y - f2RayIsecs.x;
 
     // Compute particle rendering attributes
     ComputeParticleRenderAttribs(   ParticleAttrs, 
