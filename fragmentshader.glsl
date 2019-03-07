@@ -10,7 +10,7 @@ in float fragmentDistanceToExitPoint;
 in float fragmentDistanceToEntryPoint;
 
 // Ouput data
-out vec3 color;
+out vec4 color;
 
 // Values that stay constant for the whole mesh.
 uniform sampler3D g_tex3DParticleDensityLUT;
@@ -425,64 +425,55 @@ vec4 WorldParamsToParticleScatteringLUT( in vec3 f3StartPosUSSpace,
 
 
 /*
- * COMPUTE PARTICLES:
- * =================  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- *
- * This function computes different attributes of a particle which will be used
- * for rendering
- *
+ *  MAIN FUNC: 
+ *  =========  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
-void ComputeParticleRenderAttribs(  const in SParticleAttribs       ParticleAttrs,
-                                    const in SCloudCellAttribs      CellAttrs,
-                                          in SCloudParticleLighting ParticleLighting, 
-                                    in vec3  f3CameraPos,
-                                    in vec3  f3ViewRay,
-                                    in vec3  f3EntryPointUSSpace, // Ray entry point in unit sphere (US) space
-                                    in vec3  f3ViewRayUSSpace,    // View direction in unit sphere (US) space
-                                    in vec3  f3LightDirUSSpace,   // Light direction in unit sphere (US) space
-                                    in float fDistanceToExitPoint,
-                                    in float fDistanceToEntryPoint,
-                                    out vec4 f4Color
-                                ){
-    vec3 f3EntryPointWS = f3CameraPos + fDistanceToEntryPoint * f3ViewRay;
-    //vec3 f3ExitPointWS  = f3CameraPos +  fDistanceToExitPoint * f3ViewRay;
+void main() {    
 
-	// Compute look-up coordinates
+    // To Vertex
+    vec3  f3CameraPos           = fragmentCameraPos           ;
+    vec3  f3ViewRay             = fragmentViewRay             ;
+    vec3  f3EntryPointUSSpace   = fragmentEntryPointUSSpace   ;
+    vec3  f3ViewRayUSSpace      = fragmentViewRayUSSpace      ;
+    vec3  f3LightDirUSSpace     = fragmentLightDirUSSpace     ;
+    float fDistanceToExitPoint  = fragmentDistanceToExitPoint ;
+    float fDistanceToEntryPoint = fragmentDistanceToEntryPoint;
+    
+    vec3 f3EntryPointWS = f3CameraPos + fDistanceToEntryPoint * f3ViewRay;
+
+    // Compute look-up coordinates
     vec4 f4LUTCoords;
     WorldParamsToOpticalDepthLUTCoords(f3EntryPointUSSpace, f3ViewRayUSSpace, f4LUTCoords);
 
     // Randomly rotate the sphere
-    f4LUTCoords.y += ParticleAttrs.fRndAzimuthBias;
+    f4LUTCoords.y += ParticleAttrs.fRndAzimuthBias; // -------------------------------------------------------------------------------------------------------------------------
 
 	// Get the normalized density along the view ray
-    float fNormalizedDensity = 1.f;  ///***************************************************************************************************************************************
-
+    float fNormalizedDensity = 1.f;  
     SAMPLE_4D_LUT(g_tex3DParticleDensityLUT, OPTICAL_DEPTH_LUT_DIM, f4LUTCoords, fNormalizedDensity);
 
 	// Compute actual cloud mass by multiplying normalized density with ray length
-    
     fCloudMass = fNormalizedDensity * (fDistanceToExitPoint - fDistanceToEntryPoint);
     float fFadeOutDistance = _fParticleCutOffDist * g_fParticleToFlatMorphRatio;
     float fFadeOutFactor = saturate( (_fParticleCutOffDist - fDistanceToEntryPoint) /  max(fFadeOutDistance,1) );
-    fCloudMass *= fFadeOutFactor * CellAttrs.fMorphFadeout;
-    fCloudMass *= ParticleAttrs.fDensity;
-    
+    fCloudMass *= fFadeOutFactor * CellAttrs.fMorphFadeout; // *******************************************************************************************************************
+    fCloudMass *= ParticleAttrs.fDensity; // -------------------------------------------------------------------------------------------------------------------------------------
 
-	// Compute transparency
-    fTransparency = exp( - _fAttenuationCoeff );//exp( -fCloudMass * _fAttenuationCoeff );
+    // Compute transparency
+    fTransparency = exp( - _fAttenuationCoeff );
     
 	// Evaluate phase function for single scattering
 	float fCosTheta = dot(-f3ViewRayUSSpace, f3LightDirUSSpace);
 	float PhaseFunc = HGPhaseFunc(fCosTheta, 0.8);
 
-	vec2 f2SunLightAttenuation = ParticleLighting.f2SunLightAttenuation;
-	vec3 f3SingleScattering =  fTransparency *  ParticleLighting.f4SunLight.xyz * f2SunLightAttenuation.x * PhaseFunc * pow(CellAttrs.fMorphFadeout,2);
+	vec2 f2SunLightAttenuation = ParticleLighting.f2SunLightAttenuation; // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+	vec3 f3SingleScattering =  fTransparency *  ParticleLighting.f4SunLight.xyz * f2SunLightAttenuation.x * PhaseFunc * pow(CellAttrs.fMorphFadeout,2); // ++++++++++++++++++*******************
 
     // Multiple Scattering
 	vec4  f4MultipleScatteringLUTCoords = WorldParamsToParticleScatteringLUT(f3EntryPointUSSpace, f3ViewRayUSSpace, f3LightDirUSSpace);
 
     float fMultipleScattering = texture3D(g_tex3DMultipleScatteringInParticleLUT,  f4MultipleScatteringLUTCoords.xyz).r; 
-	vec3  f3MultipleScattering = (1-fTransparency) * fMultipleScattering * f2SunLightAttenuation.y * ParticleLighting.f4SunLight.xyz;
+	vec3  f3MultipleScattering = (1-fTransparency) * fMultipleScattering * f2SunLightAttenuation.y * ParticleLighting.f4SunLight.xyz; // +++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 	// Compute ambient light
 	vec3  f3EarthCentre = vec3(0, -_fEarthRadius, 0);
@@ -490,24 +481,17 @@ void ComputeParticleRenderAttribs(  const in SParticleAttribs       ParticleAttr
 	float fCloudBottomBoundary = _fEarthRadius + _fCloudAltitude - _fCloudThickness/2.f;
 	float fAmbientStrength     = (fEnttryPointAltitude - fCloudBottomBoundary) /  _fCloudThickness;//(1-fNoise)*0.5;//0.3;
 	      fAmbientStrength     = clamp(fAmbientStrength, 0.3, 1.0);
-	vec3  f3Ambient            = (1-fTransparency) * fAmbientStrength * ParticleLighting.f4AmbientLight.xyz;
+	vec3  f3Ambient            = (1-fTransparency) * fAmbientStrength * ParticleLighting.f4AmbientLight.xyz; // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 
+    float fSingleScatteringScale = 0.2;
 
-	// Compose color
-	f4Color.xyz = 0;
-	const float fSingleScatteringScale = 0.2;
+    // Compose color
+	f4Color.xyz = vec3(0.0f,0.0f,0.0f);
 	f4Color.xyz += f3SingleScattering * fSingleScatteringScale;
 	f4Color.xyz += f3MultipleScattering * PI;
 	f4Color.xyz += f3Ambient;
 	f4Color.xyz *= 2;
+    f4Color.w    = fTransparency;
 
-    f4Color.w = fTransparency;
-}
-
-
-/*
- *  MAIN FUNC: 
- *  =========  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- */
-void main() {    
-	color = vec3(0.5, 0.0 ,0.0 );//rawcolor;//rawcolor;
+	color = f4Color;
 }

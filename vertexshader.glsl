@@ -134,7 +134,7 @@ void GetRaySphereIntersection(in  vec3  f3RayOrigin,
 
 
 vec3 GetParticleScales(in float fSize){
-    vec3 f3Scales = fSize;
+    vec3 f3Scales(fSize,fSize,fSize);
     f3Scales.y = min(f3Scales.y, _fCloudThickness/2.f);
     return f3Scales;
 }
