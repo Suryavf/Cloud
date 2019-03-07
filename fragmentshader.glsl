@@ -1,8 +1,13 @@
 #version 330 core
 
 // Interpolated values from the vertex shaders
-in vec2 fragmentCoordinate;
-in vec3 fragmentNoise;
+in  vec3 fragmentCameraPos;
+in  vec3 fragmentViewRay;
+in  vec3 fragmentEntryPointUSSpace;
+in  vec3 fragmentViewRayUSSpace;
+in  vec3 fragmentLightDirUSSpace;
+in float fragmentDistanceToExitPoint;
+in float fragmentDistanceToEntryPoint;
 
 // Ouput data
 out vec3 color;
@@ -10,6 +15,7 @@ out vec3 color;
 // Values that stay constant for the whole mesh.
 uniform sampler3D g_tex3DParticleDensityLUT;
 uniform sampler3D g_tex3DMultipleScatteringInParticleLUT;
+
 
 /*
  *  GLOBAL VARIABLES: 
@@ -438,7 +444,7 @@ void ComputeParticleRenderAttribs(  const in SParticleAttribs       ParticleAttr
                                     in float fDistanceToEntryPoint,
                                     out vec4 f4Color
                                 ){
-    //vec3 f3EntryPointWS = f3CameraPos + fDistanceToEntryPoint * f3ViewRay;
+    vec3 f3EntryPointWS = f3CameraPos + fDistanceToEntryPoint * f3ViewRay;
     //vec3 f3ExitPointWS  = f3CameraPos +  fDistanceToExitPoint * f3ViewRay;
 
 	// Compute look-up coordinates
@@ -454,16 +460,16 @@ void ComputeParticleRenderAttribs(  const in SParticleAttribs       ParticleAttr
     SAMPLE_4D_LUT(g_tex3DParticleDensityLUT, OPTICAL_DEPTH_LUT_DIM, f4LUTCoords, fNormalizedDensity);
 
 	// Compute actual cloud mass by multiplying normalized density with ray length
-    /*
+    
     fCloudMass = fNormalizedDensity * (fDistanceToExitPoint - fDistanceToEntryPoint);
     float fFadeOutDistance = _fParticleCutOffDist * g_fParticleToFlatMorphRatio;
     float fFadeOutFactor = saturate( (_fParticleCutOffDist - fDistanceToEntryPoint) /  max(fFadeOutDistance,1) );
     fCloudMass *= fFadeOutFactor * CellAttrs.fMorphFadeout;
     fCloudMass *= ParticleAttrs.fDensity;
-    */
+    
 
 	// Compute transparency
-    fTransparency = exp( _fAttenuationCoeff );//exp( -fCloudMass * _fAttenuationCoeff );
+    fTransparency = exp( - _fAttenuationCoeff );//exp( -fCloudMass * _fAttenuationCoeff );
     
 	// Evaluate phase function for single scattering
 	float fCosTheta = dot(-f3ViewRayUSSpace, f3LightDirUSSpace);
@@ -496,70 +502,6 @@ void ComputeParticleRenderAttribs(  const in SParticleAttribs       ParticleAttr
 
     f4Color.w = fTransparency;
 }
-
-
-
-// This shader renders particles
-void RenderCloudsPS(PS_Input In,
-                    out float fTransparency : SV_Target0,
-                    out float fDistToCloud  : SV_Target1,
-                    out vec4  f4Color       : SV_Target2
-                    ){
-
-    SParticleAttribs          ParticleAttrs = g_Particles          [In.uiParticleID];
-    SCloudCellAttribs           CellAttribs = g_CloudCells         [In.uiParticleID / g_GlobalCloudAttribs.uiMaxLayers];
-    SCloudParticleLighting ParticleLighting = g_bufParticleLighting[In.uiParticleID];
-
-    vec3 f3CameraPos, f3ViewRay;
-
-    f3CameraPos = g_CameraAttribs.f4CameraPos.xyz;  // Posicion de camara
-    f3ViewRay   =         normalize(In.f3ViewRay);  // direccion de vista?
-    
-    vec2 f2ScreenDim = vec2(1024, 768);
-    vec2 f2PosPS = UVToProj( In.f4Pos.xy / f2ScreenDim );
-    
-    float fDepth = GetConservativeScreenDepth( ProjToUV(f2PosPS.xy) );
-    vec4  f4ReconstructedPosWS = mul( ve4(f2PosPS.xy,fDepth,1.0), g_CameraAttribs.mViewProjInv );
-    vec3  f3WorldPos = f4ReconstructedPosWS.xyz / f4ReconstructedPosWS.w;
-
-    // Compute view ray
-    f3ViewRay = f3WorldPos - f3CameraPos;
-    float fRayLength = length(f3ViewRay);
-    f3ViewRay /= fRayLength;
-
-    // Intersect view ray with the particle
-    vec2  f2RayIsecs;
-    float fDistanceToEntryPoint, fDistanceToExitPoint;
-    vec3  f3EntryPointUSSpace, f3ViewRayUSSpace, f3LightDirUSSpace;
-    IntersectRayWithParticle(ParticleAttrs, CellAttribs, f3CameraPos,  f3ViewRay,
-                             f2RayIsecs, f3EntryPointUSSpace, f3ViewRayUSSpace,
-                             f3LightDirUSSpace,
-                             fDistanceToEntryPoint, fDistanceToExitPoint);
-   
-    if( f2RayIsecs.y < 0 || fRayLength < fDistanceToEntryPoint )
-        discard;
-    fDistanceToExitPoint = min(fDistanceToExitPoint, fRayLength);
-
-    // Compute particle rendering attributes
-    ComputeParticleRenderAttribs(   ParticleAttrs, 
-                                    CellAttribs,
-                                    ParticleLighting,
-                                    f3CameraPos,
-                                    f3ViewRay,
-                                    f3EntryPointUSSpace, 
-                                    f3ViewRayUSSpace,
-                                    f3LightDirUSSpace,
-                                    fDistanceToExitPoint,
-                                    fDistanceToEntryPoint,
-                                    f4Color
-                                    );
-
-    fTransparency = f4Color.w;
-    f4Color.xyz  *= 1-fTransparency;
-    fDistToCloud  = fTransparency < 0.99 ? fDistanceToEntryPoint : +FLT_MAX;
-}
-
-
 
 
 /*

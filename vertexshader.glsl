@@ -6,12 +6,18 @@ layout(location = 1) in vec3 normal;
 layout(location = 2) in vec2 coordinate;
 
 // Output data ; will be interpolated for each fragment.
-out vec2 fragmentCoordinate;
-out vec3 fragmentNoise;
+out  vec3 fragmentCameraPos           ;
+out  vec3 fragmentViewRay             ;
+out  vec3 fragmentEntryPointUSSpace   ;
+out  vec3 fragmentViewRayUSSpace      ;
+out  vec3 fragmentLightDirUSSpace     ;
+out float fragmentDistanceToExitPoint ;
+out float fragmentDistanceToEntryPoint;
 
 // Values that stay constant for the whole mesh.
 uniform  mat4 MVP ;
 uniform float time;
+uniform  vec3 cameraLocation;
 
 
 /*
@@ -48,6 +54,41 @@ float _fCloudThickness     =  700.f;
 float _fAttenuationCoeff   =  0.07f; // Typical scattering coefficient lies in the range 0.01 - 0.1 m^-1
 float _fParticleCutOffDist =  2e+5f;
 float _fEarthRadius     = 6360000.f;
+
+
+/*
+ *  STRUCTURES: 
+ *  ==========  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ */
+struct SCloudCellAttribs{
+    vec3  f3Center;
+    float fSize;
+
+    vec3 f3Normal;
+    uint uiNumActiveLayers;
+
+    vec3  f3Tangent;
+    float fDensity;
+
+    vec3  f3Bitangent;
+    float fMorphFadeout;
+
+    uint uiPackedLocation;
+};
+
+struct SParticleAttribs{
+    vec3  f3Pos;
+    float fSize;
+    float fRndAzimuthBias;
+    float fDensity;
+};
+
+struct SCloudParticleLighting{
+    vec4 f4SunLight;
+	vec2 f2SunLightAttenuation; // x ==   Direct Sun Light Attenuation
+							    // y == Indirect Sun Light Attenuation
+    vec4 f4AmbientLight;
+};
 
 
 /*
@@ -99,8 +140,10 @@ vec3 GetParticleScales(in float fSize){
 }
 
 // This helper function computes intersection of the view ray with the particle ellipsoid
-void IntersectRayWithParticle(const in  SParticleAttribs ParticleAttrs,
-                              const in  SCloudCellAttribs CellAttrs,
+void IntersectRayWithParticle(const in  SParticleAttribs  ParticleAttrs,
+                                    in  vec3 f3Normal,
+                                    in  vec3 f3Tangent,
+                                    in  vec3 f3Bitangent,
                               const in  vec3 f3CameraPos, 
                               const in  vec3 f3ViewRay,
                               out vec2  f2RayIsecs,
@@ -109,23 +152,23 @@ void IntersectRayWithParticle(const in  SParticleAttribs ParticleAttrs,
                               out vec3  f3LightDirUSSpace,   // Light direction in Unit Sphere (US) space
                               out float fDistanceToEntryPoint,
                               out float fDistanceToExitPoint){
+
     // Construct local frame matrix
-    vec3 f3Normal    = CellAttrs.f3Normal.xyz;
-    vec3 f3Tangent   = CellAttrs.f3Tangent.xyz;
-    vec3 f3Bitangent = CellAttrs.f3Bitangent.xyz;
     mat3 f3x3ObjToWorldSpaceRotation = mat3(f3Tangent, f3Normal, f3Bitangent); 
+
     // World to obj space is inverse of the obj to world space matrix, which is simply transpose
     // for orthogonal matrix:
     mat3 f3x3WorldToObjSpaceRotation = transpose(f3x3ObjToWorldSpaceRotation); 
     
     // Compute camera location and view direction in particle's object space:
-    vec3 f3CamPosObjSpace  = f3CameraPos - ParticleAttrs.f3Pos;                         // --------------------------------------------------- ParticleAttrs.f3Pos
-         f3CamPosObjSpace  = mul(f3CamPosObjSpace, f3x3WorldToObjSpaceRotation);
-    vec3 f3ViewRayObjSpace = mul(f3ViewRay, f3x3WorldToObjSpaceRotation );
-    vec3 f3LightDirObjSpce = mul(-g_LightAttribs.f4DirOnLight.xyz, f3x3WorldToObjSpaceRotation ); // ------------------------------------- g_LightAttribs.f4DirOnLight
+    vec3 f4DirOnLight(0.5f,0.5f,0.5f);
+    vec3  f3CamPosObjSpace = f3CameraPos - ParticleAttrs.f3Pos;    
+          f3CamPosObjSpace = mul( f3CamPosObjSpace, f3x3WorldToObjSpaceRotation );
+    vec3 f3ViewRayObjSpace = mul( f3ViewRay       , f3x3WorldToObjSpaceRotation );
+    vec3 f3LightDirObjSpce = mul(-f4DirOnLight.xyz, f3x3WorldToObjSpaceRotation ); // ------------------------------------- g_LightAttribs.f4DirOnLight
 
     // Compute scales to transform ellipsoid into the unit sphere:
-    vec3 f3Scale = 1.f / GetParticleScales(ParticleAttrs.fSize);                        //------------------------------------------------- ParticleAttrs.fSize
+    vec3 f3Scale = 1.f / GetParticleScales(ParticleAttrs.fSize);  
     
     vec3 f3ScaledCamPosObjSpace;
     f3ScaledCamPosObjSpace  = f3CamPosObjSpace*f3Scale;
@@ -140,75 +183,6 @@ void IntersectRayWithParticle(const in  SParticleAttribs ParticleAttrs,
     fDistanceToEntryPoint = length(f3ViewRayUSSpace/f3Scale) * f2RayIsecs.x;
     fDistanceToExitPoint  = length(f3ViewRayUSSpace/f3Scale) * f2RayIsecs.y;
 }
-
-
-
-
-// This shader renders particles
-void RenderCloudsPS(PS_Input In,
-                    out float fTransparency : SV_Target0,
-                    out float fDistToCloud  : SV_Target1,
-                    out vec4  f4Color       : SV_Target2
-                    ){
-
-    SParticleAttribs          ParticleAttrs = g_Particles          [In.uiParticleID];
-    SCloudCellAttribs           CellAttribs = g_CloudCells         [In.uiParticleID / g_GlobalCloudAttribs.uiMaxLayers];
-    SCloudParticleLighting ParticleLighting = g_bufParticleLighting[In.uiParticleID];
-
-    vec3 f3CameraPos, f3ViewRay;
-
-    f3CameraPos = g_CameraAttribs.f4CameraPos.xyz;  // Posicion de camara
-    f3ViewRay   =         normalize(In.f3ViewRay);  // direccion de vista?
-    
-    vec2 f2ScreenDim = vec2(1024, 768);
-    vec2 f2PosPS = UVToProj( In.f4Pos.xy / f2ScreenDim );
-    
-    float fDepth = GetConservativeScreenDepth( ProjToUV(f2PosPS.xy) );
-    vec4  f4ReconstructedPosWS = mul( ve4(f2PosPS.xy,fDepth,1.0), g_CameraAttribs.mViewProjInv );
-    vec3  f3WorldPos = f4ReconstructedPosWS.xyz / f4ReconstructedPosWS.w;
-
-    // Compute view ray
-    f3ViewRay = f3WorldPos - f3CameraPos;
-    float fRayLength = length(f3ViewRay);
-    f3ViewRay /= fRayLength;
-
-    // Intersect view ray with the particle
-    vec2  f2RayIsecs;
-    float fDistanceToEntryPoint, fDistanceToExitPoint;
-    vec3  f3EntryPointUSSpace, f3ViewRayUSSpace, f3LightDirUSSpace;
-    IntersectRayWithParticle(ParticleAttrs, CellAttribs, f3CameraPos,  f3ViewRay,
-                             f2RayIsecs, f3EntryPointUSSpace, f3ViewRayUSSpace,
-                             f3LightDirUSSpace,
-                             fDistanceToEntryPoint, fDistanceToExitPoint);
-   
-    if( f2RayIsecs.y < 0 || fRayLength < fDistanceToEntryPoint )
-        discard;
-    fDistanceToExitPoint = min(fDistanceToExitPoint, fRayLength);
-
-    // Compute particle rendering attributes
-    ComputeParticleRenderAttribs(   ParticleAttrs, 
-                                    CellAttribs,
-                                    ParticleLighting,
-                                    f3CameraPos,
-                                    f3ViewRay,
-                                    f3EntryPointUSSpace, 
-                                    f3ViewRayUSSpace,
-                                    f3LightDirUSSpace,
-                                    fDistanceToExitPoint,
-                                    fDistanceToEntryPoint,
-                                    f4Color
-                                );
-
-    fTransparency = f4Color.w;
-    f4Color.xyz  *= 1-fTransparency;
-    fDistToCloud  = fTransparency < 0.99 ? fDistanceToEntryPoint : +FLT_MAX;
-}
-
-
-
-
-
-
 
 
 
@@ -227,14 +201,54 @@ void main(){
     vec3  f3Noise = vec3(n,n,n);
     fRndAzimuthBias = f3Noise.y+(f3Noise.x-0.5)*time*5e-2;
 
+/*
+ *  Particles
+ *  .........
+ */
+    // ParticleAttrs, CellAttribs
+    SParticleAttribs    ParticleAttrs;
+    ParticleAttrs.f3Pos = gl_Position;
+    ParticleAttrs.fSize =        1.0f;
 
+    vec3  f3CellCenter(0.0f,      0.0f      , 0.0f);
+    vec3 f3EarthCentre(0.0f, - _fEarthRadius, 0.0f);
 
+    // Construct local frame
+    float3 f3Normal    = normalize(f3CellCenter.xyz - f3EarthCentre);
+    float3 f3Tangent   = normalize( cross(f3Normal, float3(0,0,1)) );
+    float3 f3Bitangent = normalize( cross(f3Tangent, f3Normal) );
+    
+    vec3 f3CameraPos, f3ViewRay;
+    f3CameraPos = vec3(0.5f,0.5f,10.0f);// g_CameraAttribs.f4CameraPos.xyz;  // Posicion de camara
+    
+    // Compute view ray
+    f3ViewRay = vec3(0.0f,0.0f,0.0f) - cameraLocation;
+    float fRayLength = length(f3ViewRay);
+    f3ViewRay /= fRayLength;
 
+    // Intersect view ray with the particle
+    vec2  f2RayIsecs;
+    float fDistanceToEntryPoint, fDistanceToExitPoint;
+    vec3  f3EntryPointUSSpace, f3ViewRayUSSpace, f3LightDirUSSpace;
+    IntersectRayWithParticle(   ParticleAttrs, 
+                                f3Normal, f3Tangent, f3Bitangent,
+                                f3CameraPos,  f3ViewRay, 
+                                f2RayIsecs, f3EntryPointUSSpace, f3ViewRayUSSpace,
+                                f3LightDirUSSpace,
+                                fDistanceToEntryPoint, fDistanceToExitPoint);
 
+    if( f2RayIsecs.y < 0 || fRayLength < fDistanceToEntryPoint )
+        discard;
+    fDistanceToExitPoint = min(fDistanceToExitPoint, fRayLength);
 
-
-
-
+    // Go to fragment
+    fragmentCameraPos            = f3CameraPos          ;
+    fragmentViewRay              = f3ViewRay            ;
+    fragmentEntryPointUSSpace    = f3EntryPointUSSpace  ;
+    fragmentViewRayUSSpace       = f3ViewRayUSSpace     ;
+    fragmentLightDirUSSpace      = f3LightDirUSSpace    ;
+    fragmentDistanceToExitPoint  = fDistanceToExitPoint ;
+    fragmentDistanceToEntryPoint = fDistanceToEntryPoint;
 }
 
  
