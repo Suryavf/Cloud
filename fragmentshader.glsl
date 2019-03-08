@@ -1,31 +1,30 @@
 #version 330 core
 
 // Interpolated values from the vertex shaders
-/*
-in  vec3 fragmentCameraPos;
-in  vec3 fragmentViewRay;
-in  vec3 fragmentEntryPointUSSpace;
-in  vec3 fragmentViewRayUSSpace;
-in  vec3 fragmentLightDirUSSpace;
-in float fragmentDistanceToExitPoint;
+in float fragmentTime                ;
+in  vec3 fragmentCameraPos           ;
+in  vec3 fragmentViewRay             ;
+in  vec3 fragmentEntryPointUSSpace   ;
+in  vec3 fragmentViewRayUSSpace      ;
+in  vec3 fragmentLightDirUSSpace     ;
+in float fragmentDistanceToExitPoint ;
 in float fragmentDistanceToEntryPoint;
-*/
-in  vec3 fragcolor           ;
+in  vec3 fragcolor                   ;
 in float fragmentTime;
 
 // Ouput data
 out vec4 color;
-/*
+/
 // Values that stay constant for the whole mesh.
 uniform sampler3D g_tex3DParticleDensityLUT;
 uniform sampler3D g_tex3DMultipleScatteringInParticleLUT;
-*/
+
 
 /*
  *  GLOBAL VARIABLES: 
  *  ================  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
- /*
+
 #define PI                              3.1415928f
 #define FLT_MAX                   3.402823466e+38f
 #define EARTH_RADIUS                     6360000.f
@@ -51,23 +50,23 @@ uniform sampler3D g_tex3DMultipleScatteringInParticleLUT;
                    fQWeight);                                                 \
 }
 
-float _fCloudAltitude      = 3000.f;
-float _fCloudThickness     =  700.f;
-float _fAttenuationCoeff   =  0.07f; // Typical scattering coefficient lies in the range 0.01 - 0.1 m^-1
-float _fParticleCutOffDist =  2e+5f;
-float _fEarthRadius     = 6360000.f;
+float _fCloudAltitude           = 3000.f;
+float _fCloudThickness          =  700.f;
+float _fAttenuationCoeff        =  0.07f; // Typical scattering coefficient lies in the range 0.01 - 0.1 m^-1
+float _fParticleCutOffDist      =  2e+5f;
+float _fEarthRadius             = 6360000.f;
+float _fReferenceParticleRadius = 200.0f
 
 vec3  _f3ExtraterrestrialSunColor(10.0f,10.0f,10.0f);
 
 // Fraction of the particle cut off distance which serves as
 // a transition region from particles to flat clouds
 static const float g_fParticleToFlatMorphRatio = 0.2;
-*/
+
 /*
  *  STRUCTURES: 
  *  ==========  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
- /*
 struct SCloudCellAttribs{
     vec3  f3Center;
     float fSize;
@@ -98,12 +97,20 @@ struct SCloudParticleLighting{
     vec4 f4AmbientLight;
 };
 
-*/
+
 /*
  *  GENERAL: 
  *  =======  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
-/*
+// Pseudorandom number generator
+// https://www.geeks3d.com/20100831/shader-library-noise-and-pseudo-random-number-generator-in-glsl/
+float rnd(vec2 x){
+    int n = int(x.x * 40.0 + x.y * 6400.0);
+    n = (n << 13) ^ n;
+    return 1.0 - float( (n * (n * n * 15731 + 789221) + \
+             1376312589) & 0x7fffffff) / 1073741824.0;
+}
+
 // Computes the zenith and azimuth angles in XZY (Y Up) coordinate system from direction
 void DirectionToZenithAzimuthAngleXZY(in vec3 f3Direction, out float fZenithAngle, out float fAzimuthAngle){
     float fZenithCos = f3Direction.y;
@@ -218,13 +225,13 @@ void IntersectRayWithParticle(const in SParticleAttribs ParticleAttrs,
     mat3 f3x3WorldToObjSpaceRotation = transpose(f3x3ObjToWorldSpaceRotation); 
     
     // Compute camera location and view direction in particle's object space:
-    vec3 f3CamPosObjSpace  = f3CameraPos - ParticleAttrs.f3Pos;                         // --------------------------------------------------- ParticleAttrs.f3Pos
+    vec3 f3CamPosObjSpace  = f3CameraPos - gl_FragCoord.xyz;                  
          f3CamPosObjSpace  = mul(f3CamPosObjSpace, f3x3WorldToObjSpaceRotation);
     vec3 f3ViewRayObjSpace = mul(f3ViewRay, f3x3WorldToObjSpaceRotation );
-    vec3 f3LightDirObjSpce = mul(-g_LightAttribs.f4DirOnLight.xyz, f3x3WorldToObjSpaceRotation ); // ------------------------------------- g_LightAttribs.f4DirOnLight
+    vec3 f3LightDirObjSpce = mul(-fragmentLightDirUSSpace.xyz, f3x3WorldToObjSpaceRotation );
 
     // Compute scales to transform ellipsoid into the unit sphere:
-    vec3 f3Scale = 1.f / GetParticleScales(ParticleAttrs.fSize, CellAttrs.uiNumActiveLayers); //------------------------------------------------- ParticleAttrs.fSize
+    vec3 f3Scale = 1.f / GetParticleScales(_fReferenceParticleRadius, 1);
     
     vec3 f3ScaledCamPosObjSpace;
     f3ScaledCamPosObjSpace  = f3CamPosObjSpace*f3Scale;
@@ -271,8 +278,8 @@ vec3 GetExtinctionUnverified(in vec3 f3StartPos, in vec3 f3EndPos, vec3 f3EyeDir
     vec2  f2ParticleDensity = GetDensityIntegralAnalytic(r, fCosZenithAngle, length(f3StartPos - f3EndPos));
 
     // Get optical depth
-    vec3 f3TotalRlghOpticalDepth = _f4RayleighExtinctionCoeff.xyz * f2ParticleDensity.x; // ----------------------------------------------------------------------------------- _f4RayleighExtinctionCoeff
-    vec3 f3TotalMieOpticalDepth  = _f4MieExtinctionCoeff     .xyz * f2ParticleDensity.y; // ----------------------------------------------------------------------------------- _f4MieExtinctionCoeff
+    vec3 f3TotalRlghOpticalDepth = _f4RayleighExtinctionCoeff.xyz * f2ParticleDensity.x;
+    vec3 f3TotalMieOpticalDepth  = _f4MieExtinctionCoeff     .xyz * f2ParticleDensity.y;
         
     // Compute extinction
     vec3   f3Extinction = exp( -(f3TotalRlghOpticalDepth + f3TotalMieOpticalDepth) );
@@ -430,13 +437,36 @@ vec4 WorldParamsToParticleScatteringLUT( in vec3 f3StartPosUSSpace,
 
     return f4LUTCoords;
 }
-*/
+
+const float maxDistance = sqrt(3.0); // Length of a cube diagonal
+float lightStepSize = maxDistance/viewSamples;
+
+struct Ray {
+    vec3 origin;
+    vec3 direction; // Normalized
+};
+
+// Perform slab method for ray/box intersection. Box spans (-1,-1,-1), (1,1,1)
+// Returns true if there is an intersection
+// t0, t1 - distances to the two intersections
+bool IntersectRayBox(Ray r, out float t0, out float t1) {
+    vec3 invR = 1.0 / r.direction;
+    vec3 tbot = invR * (vec3( -1, -1, -1), - r.origin);
+    vec3 ttop = invR * (vec3( 1, 1, 1) - r.origin);
+    vec3 tmin = min(ttop, tbot);
+    vec3 tmax = max(ttop, tbot);
+    vec2 t = max(tmin.xx, tmin.yz);
+    t0 = max(t.x, t.y);
+    t = min(tmax.xx, tmax.yz);
+    t1 = min(t.x, t.y);
+    return t0 <= t1;
+}
 
 /*
  *  MAIN FUNC: 
  *  =========  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
- /*
+ 
 void main() {    
 
     // To Vertex
@@ -455,8 +485,10 @@ void main() {
     WorldParamsToOpticalDepthLUTCoords(f3EntryPointUSSpace, f3ViewRayUSSpace, f4LUTCoords);
 
     // Randomly rotate the sphere
-    f4LUTCoords.y += ParticleAttrs.fRndAzimuthBias; // -------------------------------------------------------------------------------------------------------------------------
-
+    vec3 f3Noise = vec3( rnd(gl_FragCoord.xy), rnd(gl_FragCoord.xy+50*vec2( sin(fragmentTime),cos(fragmentTime) )), 
+                                               rnd(gl_FragCoord.xy-50*vec2( cos(fragmentTime),sin(fragmentTime) ))  ); 
+    float fRndAzimuthBias = f3Noise.y+(f3Noise.x-0.5)*fragmentTime*5e-2;
+    
 	// Get the normalized density along the view ray
     float fNormalizedDensity = 1.f;  
     SAMPLE_4D_LUT(g_tex3DParticleDensityLUT, OPTICAL_DEPTH_LUT_DIM, f4LUTCoords, fNormalizedDensity);
@@ -465,8 +497,8 @@ void main() {
     fCloudMass = fNormalizedDensity * (fDistanceToExitPoint - fDistanceToEntryPoint);
     float fFadeOutDistance = _fParticleCutOffDist * g_fParticleToFlatMorphRatio;
     float fFadeOutFactor = saturate( (_fParticleCutOffDist - fDistanceToEntryPoint) /  max(fFadeOutDistance,1) );
-    fCloudMass *= fFadeOutFactor * CellAttrs.fMorphFadeout; // *******************************************************************************************************************
-    fCloudMass *= ParticleAttrs.fDensity; // -------------------------------------------------------------------------------------------------------------------------------------
+    fCloudMass *= fFadeOutFactor; 
+    fCloudMass *= 0.5; // Density
 
     // Compute transparency
     fTransparency = exp( - _fAttenuationCoeff );
@@ -475,22 +507,26 @@ void main() {
 	float fCosTheta = dot(-f3ViewRayUSSpace, f3LightDirUSSpace);
 	float PhaseFunc = HGPhaseFunc(fCosTheta, 0.8);
 
-	vec2 f2SunLightAttenuation = ParticleLighting.f2SunLightAttenuation; // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-	vec3 f3SingleScattering =  fTransparency *  ParticleLighting.f4SunLight.xyz * f2SunLightAttenuation.x * PhaseFunc * pow(CellAttrs.fMorphFadeout,2); // ++++++++++++++++++*******************
+    vec3 f3SunLight  = vec3(0.9,0.9,0.9)/lenght(fragmentDistanceToEntryPoint);
+	vec2 f2SunLightAttenuation = exp( - texture(g_tex3DParticleDensityLUT,vec3(f3LightDirUSSpace.xy, f3ViewRayUSSpace.x*f3ViewRayUSSpace.y,))*float(1.f,0.25f) );
+	vec3 f3SingleScattering =  fTransparency *  f3SunLight * f2SunLightAttenuation.x * PhaseFunc * pow(0.0236,2);
 
     // Multiple Scattering
 	vec4  f4MultipleScatteringLUTCoords = WorldParamsToParticleScatteringLUT(f3EntryPointUSSpace, f3ViewRayUSSpace, f3LightDirUSSpace);
 
-    float fMultipleScattering = texture3D(g_tex3DMultipleScatteringInParticleLUT,  f4MultipleScatteringLUTCoords.xyz).r; //-------------------------- Tex
-	vec3  f3MultipleScattering = (1-fTransparency) * fMultipleScattering * f2SunLightAttenuation.y * ParticleLighting.f4SunLight.xyz; // +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    
+    float fMultipleScattering = texture3D(g_tex3DMultipleScatteringInParticleLUT,  f4MultipleScatteringLUTCoords.xyz).r; 
+	vec3  f3MultipleScattering = (1-fTransparency) * fMultipleScattering * f2SunLightAttenuation.y * f3SunLight;
 
 	// Compute ambient light
+    vec3 f4AmbientLight = vec3(0.6745,0.8863,1);
+
 	vec3  f3EarthCentre = vec3(0, -_fEarthRadius, 0);
 	float fEnttryPointAltitude = length(f3EntryPointWS - f3EarthCentre);
 	float fCloudBottomBoundary = _fEarthRadius + _fCloudAltitude - _fCloudThickness/2.f;
 	float fAmbientStrength     = (fEnttryPointAltitude - fCloudBottomBoundary) /  _fCloudThickness;//(1-fNoise)*0.5;//0.3;
 	      fAmbientStrength     = clamp(fAmbientStrength, 0.3, 1.0);
-	vec3  f3Ambient            = (1-fTransparency) * fAmbientStrength * ParticleLighting.f4AmbientLight.xyz; // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+	vec3  f3Ambient            = (1-fTransparency) * fAmbientStrength * f4AmbientLight;
  
     float fSingleScatteringScale = 0.2;
 
@@ -504,150 +540,134 @@ void main() {
 
 	color = f4Color;
 }
-*/
 
-float rnd(vec2 x){
-    int n = int(x.x * 40.0 + x.y * 6400.0);
-    n = (n << 13) ^ n;
-    return 1.0 - float( (n * (n * n * 15731 + 789221) + \
-             1376312589) & 0x7fffffff) / 1073741824.0;
-}
 
-float noise( in vec3 x )
-{
-    vec3 p = floor(x);
-    vec3 f = fract(x);
-	f = f*f*(3.0-2.0*f);
+
+
+void main(){   
+    // To Vertex
+    vec3  f3CameraPos           = fragmentCameraPos           ;
+    vec3  f3ViewRay             = fragmentViewRay             ;
+    vec3  f3EntryPointUSSpace   = fragmentEntryPointUSSpace   ;
+    vec3  f3ViewRayUSSpace      = fragmentViewRayUSSpace      ;
+    vec3  f3LightDirUSSpace     = fragmentLightDirUSSpace     ;
+    float fDistanceToExitPoint  = fragmentDistanceToExitPoint ;
+    float fDistanceToEntryPoint = fragmentDistanceToEntryPoint;
     
-    //vec2 iChannel0 = vec2(rnd(x.xy),rnd(x.xy));
+    vec3 f3EntryPointWS = f3CameraPos + fDistanceToEntryPoint * f3ViewRay;
 
-#if 1
-	vec2 uv = (p.xy+vec2(37.0,17.0)*p.z) + f.xy;
-    vec2 rg = vec2(rnd(x.xy),rnd(x.xy+ivec2(1,0)))/12.0f;//textureLod( iChannel0, (uv+ 0.5)/256.0, 0. ).yx;
-#else
-    ivec3 q = ivec3(p);
-	ivec2 uv = q.xy + ivec2(37,17)*q.z;
+    // Compute look-up coordinates
+    vec4 f4LUTCoords;
+    WorldParamsToOpticalDepthLUTCoords(f3EntryPointUSSpace, f3ViewRayUSSpace, f4LUTCoords);
 
-	vec2 rg = mix( mix( texelFetch( iChannel0, (uv           )&255, 0 ),
-				        texelFetch( iChannel0, (uv+ivec2(1,0))&255, 0 ), f.x ),
-				   mix( texelFetch( iChannel0, (uv+ivec2(0,1))&255, 0 ),
-				        texelFetch( iChannel0, (uv+ivec2(1,1))&255, 0 ), f.x ), f.y ).yx;
-#endif    
+    // Randomly rotate the sphere
+    vec3 f3Noise = vec3( rnd(gl_FragCoord.xy), rnd(gl_FragCoord.xy+50*vec2( sin(fragmentTime),cos(fragmentTime) )), 
+                                               rnd(gl_FragCoord.xy-50*vec2( cos(fragmentTime),sin(fragmentTime) ))  ); 
+    float fRndAzimuthBias = f3Noise.y+(f3Noise.x-0.5)*fragmentTime*5e-2;
     
-	return -1.0+2.0*mix( rg.x, rg.y, f.z );
-}
+	// Get the normalized density along the view ray
+    float fNormalizedDensity = 1.f;  
+    SAMPLE_4D_LUT(g_tex3DParticleDensityLUT, OPTICAL_DEPTH_LUT_DIM, f4LUTCoords, fNormalizedDensity);
 
-float map5( in vec3 p )
-{
-	vec3 q = p - vec3(0.0,0.1,1.0)*fragmentTime;
-	float f;
-    f  = 0.50000*noise( q ); q = q*2.02;
-    f += 0.25000*noise( q ); q = q*2.03;
-    f += 0.12500*noise( q ); q = q*2.01;
-    f += 0.06250*noise( q ); q = q*2.02;
-    f += 0.03125*noise( q );
-	return clamp( 1.5 - p.y - 2.0 + 1.75*f, 0.0, 1.0 );
-}
+	// Compute actual cloud mass by multiplying normalized density with ray length
+    fCloudMass = fNormalizedDensity * (fDistanceToExitPoint - fDistanceToEntryPoint);
+    float fFadeOutDistance = _fParticleCutOffDist * g_fParticleToFlatMorphRatio;
+    float fFadeOutFactor = saturate( (_fParticleCutOffDist - fDistanceToEntryPoint) /  max(fFadeOutDistance,1) );
+    fCloudMass *= fFadeOutFactor; 
+    fCloudMass *= 0.5; // Density
 
-float map4( in vec3 p )
-{
-	vec3 q = p - vec3(0.0,0.1,1.0)*fragmentTime;
-	float f;
-    f  = 0.50000*noise( q ); q = q*2.02;
-    f += 0.25000*noise( q ); q = q*2.03;
-    f += 0.12500*noise( q ); q = q*2.01;
-    f += 0.06250*noise( q );
-	return clamp( 1.5 - p.y - 2.0 + 1.75*f, 0.0, 1.0 );
-}
-float map3( in vec3 p )
-{
-	vec3 q = p - vec3(0.0,0.1,1.0)*fragmentTime;
-	float f;
-    f  = 0.50000*noise( q ); q = q*2.02;
-    f += 0.25000*noise( q ); q = q*2.03;
-    f += 0.12500*noise( q );
-	return clamp( 1.5 - p.y - 2.0 + 1.75*f, 0.0, 1.0 );
-}
-float map2( in vec3 p )
-{
-	vec3 q = p - vec3(0.0,0.1,1.0)*fragmentTime;
-	float f;
-    f  = 0.50000*noise( q ); q = q*2.02;
-    f += 0.25000*noise( q );;
-	return clamp( 1.5 - p.y - 2.0 + 1.75*f, 0.0, 1.0 );
-}
-
-vec3 sundir = normalize( vec3(-1.0,0.0,-1.0) );
-
-vec4 integrate( in vec4 sum, in float dif, in float den, in vec3 bgcol, in float t )
-{
-    // lighting
-    vec3 lin = vec3(0.65,0.7,0.75)*1.4 + vec3(1.0, 0.6, 0.3)*dif;        
-    vec4 col = vec4( mix( vec3(1.0,0.95,0.8), vec3(0.25,0.3,0.35), den ), den );
-    col.xyz *= lin;
-    col.xyz = mix( col.xyz, bgcol, 1.0-exp(-0.003*t*t) );
-    // front to back blending    
-    col.a *= 0.4;
-    col.rgb *= col.a;
-    return sum + col*(1.0-sum.a);
-}
-
-#define MARCH(STEPS,MAPLOD) for(int i=0; i<STEPS; i++) { vec3  pos = ro + t*rd; if( pos.y<-3.0 || pos.y>2.0 || sum.a > 0.99 ) break; float den = MAPLOD( pos ); if( den>0.01 ) { float dif =  clamp((den - MAPLOD(pos+0.3*sundir))/0.6, 0.0, 1.0 ); sum = integrate( sum, dif, den, bgcol, t ); } t += max(0.05,0.02*t); }
-
-vec4 raymarch( in vec3 ro, in vec3 rd, in vec3 bgcol, in ivec2 px )
-{
-	vec4 sum = vec4(0.0);
-
-	float t = 0.0;//0.05*texelFetch( iChannel0, px&255, 0 ).x;
-
-    MARCH(30,map5);
-    MARCH(30,map4);
-    MARCH(30,map3);
-    MARCH(30,map2);
-
-    return clamp( sum, 0.0, 1.0 );
-}
-
-mat3 setCamera( in vec3 ro, in vec3 ta, float cr )
-{
-	vec3 cw = normalize(ta-ro);
-	vec3 cp = vec3(sin(cr), cos(cr),0.0);
-	vec3 cu = normalize( cross(cw,cp) );
-	vec3 cv = normalize( cross(cu,cw) );
-    return mat3( cu, cv, cw );
-}
-
-vec4 render( in vec3 ro, in vec3 rd, in ivec2 px )
-{
-    // background sky     
-	float sun = clamp( dot(sundir,rd), 0.0, 1.0 );
-	vec3 col = vec3(0.6,0.71,0.75) - rd.y*0.2*vec3(1.0,0.5,1.0) + 0.15*0.5;
-	col += 0.2*vec3(1.0,.6,0.1)*pow( sun, 8.0 );
-
-    // clouds    
-    vec4 res = raymarch( ro, rd, col, px );
-    col = col*(1.0-res.w) + res.xyz;
+    // Compute transparency
+    fTransparency = exp( - _fAttenuationCoeff );
     
-    // sun glare    
-	col += 0.2*vec3(1.0,0.4,0.2)*pow( sun, 3.0 );
+	// Evaluate phase function for single scattering
+	float fCosTheta = dot(-f3ViewRayUSSpace, f3LightDirUSSpace);
+	float PhaseFunc = HGPhaseFunc(fCosTheta, 0.8);
 
-    return vec4( col, 1.0 );
-}
+    vec3 f3SunLight  = vec3(0.9,0.9,0.9)/lenght(fragmentDistanceToEntryPoint);
+	vec2 f2SunLightAttenuation = exp( - texture(g_tex3DParticleDensityLUT,vec3(f3LightDirUSSpace.xy, f3ViewRayUSSpace.x*f3ViewRayUSSpace.y,))*float(1.f,0.25f) );
+	vec3 f3SingleScattering =  fTransparency *  f3SunLight * f2SunLightAttenuation.x * PhaseFunc * pow(0.0236,2);
 
-void main( )
-{   
-    vec2 iResolution = vec2(1024, 768);
+    // Multiple Scattering
+	vec4  f4MultipleScatteringLUTCoords = WorldParamsToParticleScatteringLUT(f3EntryPointUSSpace, f3ViewRayUSSpace, f3LightDirUSSpace);
 
-    vec2 p = vec2(-iResolution.xy + 2.0*gl_FragCoord.xy)/ iResolution.y;
-
-    vec2 m = vec2(0.5f,0.5f);// iMouse.xy/iResolution.xy;
     
-    // camera
-    vec3 ro = 4.0*normalize(vec3(sin(3.0*m.x), 0.4*m.y, cos(3.0*m.x)));
-	vec3 ta = vec3(0.0, -1.0, 0.0);
-    mat3 ca = setCamera( ro, ta, 0.0 );
-    // ray
-    vec3 rd = ca * normalize( vec3(p.xy,1.5));
-    
-    color = render( ro, rd, ivec2(gl_FragCoord-0.5) );
+    float fMultipleScattering = texture3D(g_tex3DMultipleScatteringInParticleLUT,  f4MultipleScatteringLUTCoords.xyz).r; 
+	vec3  f3MultipleScattering = (1-fTransparency) * fMultipleScattering * f2SunLightAttenuation.y * f3SunLight;
+
+	// Compute ambient light
+    vec3 f4AmbientLight = vec3(0.6745,0.8863,1);
+
+	vec3  f3EarthCentre = vec3(0, -_fEarthRadius, 0);
+	float fEnttryPointAltitude = length(f3EntryPointWS - f3EarthCentre);
+	float fCloudBottomBoundary = _fEarthRadius + _fCloudAltitude - _fCloudThickness/2.f;
+	float fAmbientStrength     = (fEnttryPointAltitude - fCloudBottomBoundary) /  _fCloudThickness;//(1-fNoise)*0.5;//0.3;
+	      fAmbientStrength     = clamp(fAmbientStrength, 0.3, 1.0);
+	vec3  f3Ambient            = (1-fTransparency) * fAmbientStrength * f4AmbientLight;
+ 
+    float fSingleScatteringScale = 0.2;
+
+    // Compose color
+	f4Color.xyz = vec3(0.0f,0.0f,0.0f);
+	f4Color.xyz += f3SingleScattering * fSingleScatteringScale;
+	f4Color.xyz += f3MultipleScattering * PI;
+	f4Color.xyz += f3Ambient;
+	f4Color.xyz *= 2;
+    f4Color.w    = fTransparency;
+
+	// Direction in view splace
+	vec3 viewDirection;
+	viewDirection.xy = 2.0f * gl_FragCoord.xy / screenSize - 1.0f;
+	viewDirection.z = -1.0f / tanFOV;
+	// FOV corresponds to Y axis, scale x accordingly
+	viewDirection.x *= screenSize.x / screenSize.y;
+
+	// Transform direction to world	space
+	viewDirection = ( viewInverse * vec4( viewDirection, 0 ) ).xyz;
+	
+	Ray viewRay = Ray( eyePosition, normalize( viewDirection ) );	
+
+	vec3 rawcolor = f4Color.xyz;
+	vec3 pos = viewRay.origin;
+	float tmin, tmax;
+	IntersectRayBox( viewRay, tmin, tmax );
+	pos += tmax * viewRay.direction;
+	float viewStepSize = ( tmax - tmin ) / viewSamples;
+
+	vec3 shadeColor = vec3( shadeColorRed, shadeColorGreen, shadeColorBlue );
+	vec3 lightColor = vec3( lightColorRed, lightColorGreen, lightColorBlue );
+	vec3 sunPosition = vec3( sunPositionX, sunPositionY, sunPositionZ );
+
+	for( int i = 0; i < viewSamples; ++i ) {
+		
+		float cellDensity = texture( density, pos ).x;
+		if( cellDensity > densityCutoff ) {
+			
+			cellDensity *= densityFactor;
+		
+			Ray lightRay = Ray( pos, normalize( sunPosition ) );
+
+			float attenuation = 1;
+			vec3 lightPos = pos;
+			
+			// Calculate light attenuation
+			for( int j = 0; j < lightSamples; ++j ) {
+				// Closer texture reads contribute more
+				attenuation *= 1 - 
+					texture( density, lightPos ).x	
+					* attenuationFactor				 
+					* ( 1 - j / lightSamples );
+				lightPos += lightRay.direction * lightStepSize;
+			}
+
+			// Add color depending on cell density and attenuation
+			if( cellDensity > 0.001 ) {
+				rawcolor = mix( rawcolor, mix ( shadeColor, lightColor, attenuation ), 
+			         cellDensity * colorMultiplier);
+			}
+		}
+
+		pos -= viewRay.direction * viewStepSize;
+
+	}
+	color = vec4(rawcolor,1.0);
 }

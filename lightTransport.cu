@@ -610,7 +610,6 @@ void launchOpticalDepthKernel(cudaArray *cudaImageArray, dim3 texDim){
 //  Run Kernel (optical depth)
 //  ..........................
     OpticalDepthKernel<<< gridDim, blockDim >>>(texDim);
-
 }
 
 extern "C"
@@ -628,5 +627,4 @@ void launchScatteringKernel(cudaArray *cudaImageArray, dim3 texDim){
 //  Run Kernel (scattering)
 //  .......................
     ScatteringKernel<<< gridDim, blockDim >>>(texDim);
-
 }

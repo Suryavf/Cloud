@@ -6,9 +6,7 @@ layout(location = 1) in vec3 normal;
 layout(location = 2) in vec2 coordinate;
 
 // Output data ; will be interpolated for each fragment.
-out  vec3 fragcolor           ;
-out float fragmentTime;
-/*
+out float fragmentTime                ;
 out  vec3 fragmentCameraPos           ;
 out  vec3 fragmentViewRay             ;
 out  vec3 fragmentEntryPointUSSpace   ;
@@ -16,7 +14,7 @@ out  vec3 fragmentViewRayUSSpace      ;
 out  vec3 fragmentLightDirUSSpace     ;
 out float fragmentDistanceToExitPoint ;
 out float fragmentDistanceToEntryPoint;
-*/
+
 // Values that stay constant for the whole mesh.
 uniform  mat4 MVP ;
 uniform float Time;
@@ -144,7 +142,7 @@ vec3 GetParticleScales(in float fSize){
     f3Scales.y = min(f3Scales.y , _fCloudThickness/2.f);
     return f3Scales;
 }
-/*
+
 // This helper function computes intersection of the view ray with the particle ellipsoid
 void IntersectRayWithParticle(const in  SParticleAttribs  ParticleAttrs,
                                     in  vec3 f3Normal,
@@ -190,7 +188,6 @@ void IntersectRayWithParticle(const in  SParticleAttribs  ParticleAttrs,
     fDistanceToExitPoint  = length(f3ViewRayUSSpace/f3Scale) * f2RayIsecs.y;
 }
 
-*/
 
 /*
  *  Main Funtion
@@ -200,19 +197,18 @@ void main(){
 
 	// Output position of the vertex, in clip space : MVP * position
 	gl_Position =  MVP * vec4(vertexPosition_modelspace,1);
-	/*
+	
     fragmentCoordinate = coordinate;
 
     // Noise
     float n = rnd( gl_Vertex.xyz );
     vec3  f3Noise = vec3(n,n,n);
     fRndAzimuthBias = f3Noise.y+(f3Noise.x-0.5)*time*5e-2;
-    */
+    
 /*
  *  Particles
  *  .........
  */
- /*
     // ParticleAttrs, CellAttribs
     SParticleAttribs    ParticleAttrs;
     ParticleAttrs.f3Pos = gl_Position;
@@ -257,8 +253,7 @@ void main(){
     fragmentLightDirUSSpace      = f3LightDirUSSpace    ;
     fragmentDistanceToExitPoint  = fDistanceToExitPoint ;
     fragmentDistanceToEntryPoint = fDistanceToEntryPoint;
-    */
-    fragcolor = vec3(0,0,0);
+    
     fragmentTime = Time;
 }
 
