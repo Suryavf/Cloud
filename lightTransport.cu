@@ -480,7 +480,7 @@ __device__ float GatherScatteringPS(float4 LUTCoords){
 
 //float ComputeScatteringOrderPS(SScreenSizeQuadVSOutput In) : SV_Target
 //{
-__device__ float ComputeScatteringOrderPS(float3 posUSSpace, float3 viewRayUSSpace, float3 lightDirUSSpace){
+__device__ float ComputeScatteringOrderPS(float3 viewRayUSSpace, float3 lightDirUSSpace){
 
     //float4 startPointLUTCoords = float4(ProjToUV(In.m_f2PosPS), g_GlobalCloudAttribs.f4Parameter.xy);
 
@@ -490,6 +490,7 @@ __device__ float ComputeScatteringOrderPS(float3 posUSSpace, float3 viewRayUSSpa
     float2 rayIsecs;
     // f3NormalizedStartPos  is located exactly on the surface; slightly move start pos inside the sphere
     // to avoid precision issues
+    float3 posUSSpace = make_float3(0.0,0.0,0.0);
     float3 biasedPos = posUSSpace + prod(1e-4,viewRayUSSpace);
 
     float  radius = 1.0f;
@@ -548,10 +549,20 @@ __device__ float ComputeScatteringOrderPS(float3 posUSSpace, float3 viewRayUSSpa
 		return;
     }
     
+    // z = w*z
+    int w = z%16;//z -floor(z/16)*16;
+        z = (z-w)/16;
 
-    /*+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-*/
+    float stepangle = PI/16;
+    float   phiS = x * stepangle;
+    float thetaS = y * stepangle;
+    float   phiV = z * stepangle;
+    float thetaV = w * stepangle;
 
-    
+    //float3 raydir = ZenithAzimuthAngleToDirectionXZY(phiV, thetaV);
+    float4 LUTCoords = make_float4(phiS,thetaS,phiV,thetaV);
+    float val = PrecomputeSingleSctrPS(LUTCoords);
+    surf3Dwrite(val,surfaceOpticalDepthWrite,x*sizeof(float),y,z);
 }
 
  __global__ void ScatteringKernel(dim3 texDim){
@@ -566,7 +577,17 @@ __device__ float ComputeScatteringOrderPS(float3 posUSSpace, float3 viewRayUSSpa
         return;
     }
     
+    float stepangle = PI/16;
+    float   phiS = 0 * stepangle; // Simetrico!!
+    float thetaS = x * stepangle;
+    float   phiV = y * stepangle;
+    float thetaV = z * stepangle;
 
+    float3 viewdir = ZenithAzimuthAngleToDirectionXZY(phiV, thetaV);
+    float3  raydir = ZenithAzimuthAngleToDirectionXZY(phiS, thetaS);
+
+    float val = ComputeScatteringOrderPS(viewdir, raydir);
+    surf3Dwrite(val,surfaceScatteringWrite,x*sizeof(float),y,z);
 }
 
 
