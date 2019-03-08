@@ -348,12 +348,9 @@ __device__ float ComputeDensity(float3 currPos){
 	return density;
 }
 
-__device__ float2 PreComputeOpticalDepth(float3 normalizedStartPos, float3 rayDir){
+__device__ float PreComputeOpticalDepth(float3 normalizedStartPos, float3 rayDir){
     // This shader computes level 0 of the maximum density mip map
 
-    //float3 normalizedStartPos, rayDir;
-    //OpticalDepthLUTCoordsToWorldParams( float4(ProjToUV(In.m_f2PosPS), g_GlobalCloudAttribs.f4Parameter.xy), normalizedStartPos, rayDir );
-    
     // Intersect the view ray with the unit sphere:
     float2 rayIsecs;
     // normalizedStartPos  is located exactly on the surface; slightly move start pos inside the sphere
@@ -375,7 +372,7 @@ __device__ float2 PreComputeOpticalDepth(float3 normalizedStartPos, float3 rayDi
         float density = ComputeDensity(f3CurrPos);
         totalDensity += density;
     }
-    return make_float2(totalDensity/numSteps,totalDensity/numSteps);
+    return totalDensity/numSteps;
 }
 
 
@@ -559,9 +556,9 @@ __device__ float ComputeScatteringOrderPS(float3 viewRayUSSpace, float3 lightDir
     float   phiV = z * stepangle;
     float thetaV = w * stepangle;
 
-    //float3 raydir = ZenithAzimuthAngleToDirectionXZY(phiV, thetaV);
-    float4 LUTCoords = make_float4(phiS,thetaS,phiV,thetaV);
-    float val = PrecomputeSingleSctrPS(LUTCoords);
+    float3 viewdir = ZenithAzimuthAngleToDirectionXZY(phiV, thetaV);
+    float3  raydir = ZenithAzimuthAngleToDirectionXZY(phiS, thetaS);
+    float val = PreComputeOpticalDepth(viewdir,raydir);
     surf3Dwrite(val,surfaceOpticalDepthWrite,x*sizeof(float),y,z);
 }
 

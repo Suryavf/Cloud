@@ -22,6 +22,8 @@ pkg_search_module(GLFW REQUIRED glfw3)
 find_package(OpenGL REQUIRED)
 find_package(GLUT REQUIRED)
 
+find_package(assimp REQUIRED)
+
 find_package(GLEW REQUIRED)
 if(${GLEW_FOUND})
     add_definitions(-DUSE_GLEW)
