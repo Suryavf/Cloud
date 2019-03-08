@@ -3,8 +3,8 @@
 #define OPTICAL_DEPTH_LUT_DIM float4(64,32,64,32)
 #define NUM_PARTICLE_LAYERS 1
 
-#define SRF_SCATTERING_IN_PARTICLE_LUT_DIM float3(32,64,16)
-#define VOL_SCATTERING_IN_PARTICLE_LUT_DIM float4(32,64,32,8)
+#define SRF_SCATTERING_IN_PARTICLE_LUT_DIM make_float3(32,64,16)
+#define VOL_SCATTERING_IN_PARTICLE_LUT_DIM make_float4(32,64,32,8)
 #define THREAD_GROUP_SIZE 64
 #define NUM_INTEGRATION_STEPS 64
 #define PI                              3.1415928f
@@ -18,17 +18,65 @@ surface<void, cudaSurfaceType3D>   surfaceScatteringWrite;
  *  GENERAL: Device functions
  *  =======  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
-
+__device__ float3 operator+(const float3 &a, const float3 &b) {
+    return make_float3(a.x+b.x, a.y+b.y, a.z+b.z);
+}
+__device__ float3 operator-(const float3 &a, const float3 &b) {
+    return make_float3(a.x-b.x, a.y-b.y, a.z-b.z);
+}
+__device__ float3 operator*(const float3 &a, const float3 &b) {
+    return make_float3(a.x*b.x, a.y*b.y, a.z*b.z);
+}
+__device__ float3 operator*(const float3 &v, const float &a) {
+    return make_float3(v.x*a, v.y*a, v.z*a);
+}
+__device__ float3 operator*(const float &a, const float3 &v) {
+    return make_float3(v.x*a, v.y*a, v.z*a);
+}
+__device__ float3 neg(const float3 &a){
+    return make_float3( - a.x, - a.y, - a.z);
+}
+__device__ float3 prod(float a, float3 v){
+    return make_float3( a*v.x, a*v.y , a*v.z );
+}
+__device__ float3 frac(float3 v, float a){
+    return make_float3( v.x/a , v.y/a , v.z/a );
+}
+__device__ float2 frac(float2 v, float a){
+    return make_float2( v.x/a , v.y/a );
+}
 __device__ float dot(float3 a, float3 b){
     return a.x*b.x + a.y*b.y + a.z*b.z;
 }
-
-__device__ float3 normalize(float3 v){
-    return rsqrt(dot(v,v))*v;
+__device__ float3 p2p(float3 a, float3 b){
+    return make_float3(a.x*b.x, a.y*b.y, a.z*b.z);
 }
-
+__device__ float3 normalize(float3 v){
+    return prod( rsqrt(dot(v,v)) , v );//rsqrt(dot(v,v))  *v;
+}
+__device__ float length(float3 v){
+  return sqrt(dot(v,v));
+}
+__device__ float clamp(float x, float a, float b){
+  return max(a, min(b, x));
+}
+__device__ float fract(float  x){ 
+    return  x - floor(x); 
+}
+__device__ float3 floor(float3 v){
+    return make_float3( floor(v.x), floor(v.y), floor(v.z) );
+}
+__device__ float3 fract(float3 v){
+    return make_float3( fract(v.x), fract(v.y), fract(v.z) );
+}
+__device__ float3 lerp(float3 a, float3 b, float w){
+  return a + prod(w,(b-a));
+}
+__device__ float lerp(float a, float b, float w){
+  return a + w*(b-a);
+}
 __device__ float3 cross(float3 a, float3 b){
-  return a.yzx * b.zxy - a.zxy * b.yzx;
+  return make_float3(  a.y*b.z - a.z*b.y , -a.x*b.z + a.z*b.x , a.x*b.y - a.y*b.x );
 }
 
 // Computes direction from the zenith and azimuth angles in XZY (Y Up) coordinate system
@@ -69,7 +117,7 @@ __device__ void DirectionToZenithAzimuthAngleXZY(float3 &direction, float &zenit
 }
 
 // Constructs local XYZ (Z Up) frame from Up and Inward vectors
-__device__ void ConstructLocalFrameXYZ(float3 &up, float3 &inward, 
+__device__ void ConstructLocalFrameXYZ(float3 up, float3 inward, 
                                        float3 & X, float3 & Y, float3 & Z){
     //      Z (Up)
     //      |    Y  (Inward)
@@ -99,7 +147,10 @@ __device__ float3 GetDirectionInLocalFrameXYZ(float3 localX,
     sincosf(localAzimuthAngle, &dirLocalAzimuthSin, &dirLocalAzimuthCos);
     
     // Reconstruct view ray
-    return localZ * dirLocalCosZenithAngle + dirLocalSinZenithAngle * (dirLocalAzimuthCos * localX + dirLocalAzimuthSin * localY );
+    //return localZ * dirLocalCosZenithAngle + dirLocalSinZenithAngle * (dirLocalAzimuthCos * localX + dirLocalAzimuthSin * localY );
+    return    prod(dirLocalCosZenithAngle                   ,localZ) 
+            + prod(dirLocalSinZenithAngle*dirLocalAzimuthCos,localX)
+            + prod(dirLocalSinZenithAngle*dirLocalAzimuthSin,localY);
 }
 
 // Computes zenith and azimuth angles in local XYZ (Z Up) frame from the direction
@@ -120,29 +171,28 @@ __device__ void ComputeLocalFrameAnglesXYZ( float3 &localX,
 
 // Get Ray Sphere Intersection
 // http://wiki.cgsociety.org/index.php/Ray_Sphere_Intersection
-__device__ void GetRaySphereIntersection(float3 &rayOrigin,    float3 &rayDirection, 
-                                         float3 &sphereCenter, float  &sphereRadius,
+__device__ void GetRaySphereIntersection(float3  rayOrigin,    float3  rayDirection, 
+                                         float3  sphereCenter, float  &sphereRadius,
                                          float2 &intersections){
-   rayOrigin -= sphereCenter;
-   float A = dot(rayDirection, &rayDirection);
-   float B = 2 * dot(&rayOrigin, &rayDirection);
+   rayOrigin = rayOrigin - sphereCenter;
+   float A =     dot(rayDirection, rayDirection);
+   float B = 2 * dot(rayOrigin,    rayDirection);
    float C = dot(rayOrigin, rayOrigin) - sphereRadius*sphereRadius;
    float D = B*B - 4*A*C;
 
    // If discriminant is negative, there are no real roots hence the ray misses the
    // sphere
    if( D<0 ){
-       intersections = float2(-1,-1);
+       intersections = make_float2(-1,-1);
    }
    else{
        D = sqrt(D);
-       intersections = float2( (-B - D)/(2*A) , (-B + D)/(2*A) ); // A must be positive here!!
+       intersections = make_float2( (-B - D)/(2*A) , (-B + D)/(2*A) ); // A must be positive here!!
    }
 }
 
-
 __device__ float HGPhaseFunc(float cosTheta, const float g = 0.9){
-    return (1/(4*PI) * (1 - g*g)) / pow( max((1 + g*g) - (2*g)*cosTheta,0), 3.f/2.f);
+    return (1/(4*PI) * (1 - g*g)) / pow( max((1 + g*g) - (2*g)*cosTheta,0.0f), 3.f/2.f);
 }
 
 
@@ -153,7 +203,7 @@ __device__ float HGPhaseFunc(float cosTheta, const float g = 0.9){
  */
  
     /*+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-*/
-/*
+
  #define SAMPLE_4D_LUT(tex3DLUT, LUT_DIM, f4LUTCoords, fLOD, Result)  \
  {                                                               \
      float3 f3UVW;                                               \
@@ -170,49 +220,50 @@ __device__ float HGPhaseFunc(float cosTheta, const float g = 0.9){
          fQWeight);                                                                          \
  }
 
- void ParticleScatteringLUTToWorldParams(in float4 f4LUTCoords, 
-                                        out float3 f3StartPosUSSpace,
-                                        out float3 f3ViewDirUSSpace,
-                                        out float3 f3LightDirUSSpace,
-                                        in uniform bool bSurfaceOnly){
-    f3LightDirUSSpace = float3(0,0,1);
+ __device__ void ParticleScatteringLUTToWorldParams(float4 f4LUTCoords, 
+                                                    float3 &f3StartPosUSSpace,
+                                                    float3 &f3ViewDirUSSpace,
+                                                    float3 &f3LightDirUSSpace){
+    f3LightDirUSSpace = make_float3(0,0,1);
     float fStartPosZenithAngle = f4LUTCoords.x * PI;
-    f3StartPosUSSpace = float3(0,0,0);
-    sincos(fStartPosZenithAngle, f3StartPosUSSpace.x, f3StartPosUSSpace.z);
-
+    f3StartPosUSSpace = make_float3(0,0,0);
+    sincosf(fStartPosZenithAngle, &f3StartPosUSSpace.x, &f3StartPosUSSpace.z);
+    
+    // Constructs local XYZ (Z Up) frame from Up and Inward vectors
     float3 f3LocalX, f3LocalY, f3LocalZ;
-    ConstructLocalFrameXYZ(-f3StartPosUSSpace, f3LightDirUSSpace, f3LocalX, f3LocalY, f3LocalZ);
+    f3LocalZ = normalize(neg(f3StartPosUSSpace));
+    f3LocalX = normalize(cross(f3LightDirUSSpace, f3LocalZ));
+    f3LocalY = normalize(cross(f3LocalZ, f3LocalX));
 
-    if( !bSurfaceOnly )
-    {
-    float fDistFromCenter = f4LUTCoords.w;
-    // Scale the start position according to the distance from center
-    f3StartPosUSSpace *= fDistFromCenter;
+    bool bSurfaceOnly = true;
+    if( !bSurfaceOnly ){
+        float fDistFromCenter = f4LUTCoords.w;
+        // Scale the start position according to the distance from center
+        f3StartPosUSSpace = prod(fDistFromCenter,f3StartPosUSSpace);//*= fDistFromCenter;
     }
 
     float fViewDirLocalAzimuth = (f4LUTCoords.y - 0.5) * (2 * PI); 
-    float fViewDirLocalZenith = f4LUTCoords.z * ( bSurfaceOnly ? (PI/2) : PI );
+    float fViewDirLocalZenith = f4LUTCoords.z * (PI/2) ;
     f3ViewDirUSSpace = GetDirectionInLocalFrameXYZ(f3LocalX, f3LocalY, f3LocalZ, fViewDirLocalZenith, fViewDirLocalAzimuth);
 }
 
 // All parameters must be defined in the unit sphere (US) space
-float4 WorldParamsToParticleScatteringLUT(  in float3 f3StartPosUSSpace, 
-                                            in float3 f3ViewDirInUSSpace, 
-                                            in float3 f3LightDirInUSSpace,
-                                            in uniform bool bSurfaceOnly){
-                                            float4 f4LUTCoords = 0;
-
+__device__ float4 WorldParamsToParticleScatteringLUT(   float3 f3StartPosUSSpace, 
+                                                        float3 f3ViewDirInUSSpace, 
+                                                        float3 f3LightDirInUSSpace  ){
+    
+    float4 f4LUTCoords = make_float4(0,0,0,0);
     float fDistFromCenter = 0;
-    if( !bSurfaceOnly ){
-        // Compute distance from center and normalize start position
-        fDistFromCenter = length(f3StartPosUSSpace);
-        f3StartPosUSSpace /= max(fDistFromCenter, 1e-5);
-    }
+    
+    // Compute distance from center and normalize start position
+    fDistFromCenter = length(f3StartPosUSSpace);
+    f3StartPosUSSpace = frac( f3StartPosUSSpace, max(fDistFromCenter, 1e-5) );
+
     float fStartPosZenithCos = dot(f3StartPosUSSpace, f3LightDirInUSSpace);
     f4LUTCoords.x = acos(fStartPosZenithCos);
 
     float3 f3LocalX, f3LocalY, f3LocalZ;
-    ConstructLocalFrameXYZ(-f3StartPosUSSpace, f3LightDirInUSSpace, f3LocalX, f3LocalY, f3LocalZ);
+    ConstructLocalFrameXYZ(neg(f3StartPosUSSpace), f3LightDirInUSSpace, f3LocalX, f3LocalY, f3LocalZ);
 
     float fViewDirLocalZenith, fViewDirLocalAzimuth;
     ComputeLocalFrameAnglesXYZ(f3LocalX, f3LocalY, f3LocalZ, f3ViewDirInUSSpace, fViewDirLocalZenith, fViewDirLocalAzimuth);
@@ -222,22 +273,19 @@ float4 WorldParamsToParticleScatteringLUT(  in float3 f3StartPosUSSpace,
     // In case the parameterization is performed for the sphere surface, the allowable range for the 
     // view direction zenith angle is [0, PI/2] since the ray should always be directed into the sphere.
     // Otherwise the range is whole [0, PI]
-    f4LUTCoords.xyz = f4LUTCoords.xyz / float3(PI, 2*PI, bSurfaceOnly ? (PI/2) : PI) + float3(0, 0.5, 0);
-    if( bSurfaceOnly )
-        f4LUTCoords.w = 0;
-    else
-        f4LUTCoords.w = fDistFromCenter;
+    f4LUTCoords.x = f4LUTCoords.x/   PI       ;
+    f4LUTCoords.y = f4LUTCoords.y/(2*PI) + 0.5;
+    f4LUTCoords.z = f4LUTCoords.z/(PI/2)      ;
+    f4LUTCoords.w = 0;
     
-    if( bSurfaceOnly )
-        f4LUTCoords.xz = clamp(f4LUTCoords.xyz, 0.5/SRF_SCATTERING_IN_PARTICLE_LUT_DIM, 1-0.5/SRF_SCATTERING_IN_PARTICLE_LUT_DIM).xz;
-    else
-        f4LUTCoords.xzw = clamp(f4LUTCoords, 0.5/VOL_SCATTERING_IN_PARTICLE_LUT_DIM, 1-0.5/VOL_SCATTERING_IN_PARTICLE_LUT_DIM).xzw;
-
+    f4LUTCoords.x = clamp(f4LUTCoords.x, 0.5/SRF_SCATTERING_IN_PARTICLE_LUT_DIM.x, 1-0.5/SRF_SCATTERING_IN_PARTICLE_LUT_DIM.x);
+    f4LUTCoords.z = clamp(f4LUTCoords.z, 0.5/SRF_SCATTERING_IN_PARTICLE_LUT_DIM.z, 1-0.5/SRF_SCATTERING_IN_PARTICLE_LUT_DIM.z);
+    
     return f4LUTCoords;
 }
-*/
+
 /*+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-*/
-/*
+
 
 // All noise functions are designed for values on integer scale.
 // They are tuned to avoid visible periodicity for both positive and
@@ -250,20 +298,23 @@ __device__ float hash(float2 p) {
     return fract(1e4 * sin(17.0 * p.x + p.y * 0.1) * (0.1 + abs(sin(p.y * 13.0 + p.x)))); 
 }
 __device__ float noise(float3 x) {
-    const vec3 step = vec3(110, 241, 171);
+    float3 step = make_float3(110, 241, 171);
 
-    vec3 i = floor(x);
-    vec3 f = fract(x);
+    float3 i = floor(x);
+    float3 f = fract(x);
  
     // For performance, compute the base input to a 1D hash from the integer part of the argument and the 
     // incremental change to the 1D based on the 3D -> 1D wrapping
     float n = dot(i, step);
 
-    vec3 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(mix( hash(n + dot(step, vec3(0, 0, 0))), hash(n + dot(step, vec3(1, 0, 0))), u.x),
-                   mix( hash(n + dot(step, vec3(0, 1, 0))), hash(n + dot(step, vec3(1, 1, 0))), u.x), u.y),
-               mix(mix( hash(n + dot(step, vec3(0, 0, 1))), hash(n + dot(step, vec3(1, 0, 1))), u.x),
-                   mix( hash(n + dot(step, vec3(0, 1, 1))), hash(n + dot(step, vec3(1, 1, 1))), u.x), u.y), u.z);
+    float3 u = f * f;
+    float3 t = make_float3(3.0,3.0,3.0) - prod(2.0,f);
+    u = u * t;
+
+    return lerp(lerp(lerp( hash(n + dot(step, make_float3(0, 0, 0))), hash(n + dot(step, make_float3(1, 0, 0))), u.x),
+                     lerp( hash(n + dot(step, make_float3(0, 1, 0))), hash(n + dot(step, make_float3(1, 1, 0))), u.x), u.y),
+                lerp(lerp( hash(n + dot(step, make_float3(0, 0, 1))), hash(n + dot(step, make_float3(1, 0, 1))), u.x),
+                     lerp( hash(n + dot(step, make_float3(0, 1, 1))), hash(n + dot(step, make_float3(1, 1, 1))), u.x), u.y), u.z);
 }
 // By Morgan McGuire @morgan3d, http://graphicscodex.com
 // Reuse permitted under the BSD license.
@@ -273,7 +324,7 @@ __device__ float GetRandomDensity(float3 pos, float startFreq, int n_Octaves = 3
     float amplitude = 1;
     float fFreq = startFreq;
     for(int i=0; i < n_Octaves; ++i){
-        noiseFrame += ( noise( pos*fFreq ) - 0.5 ) * amplitude;
+        noiseFrame += ( noise( prod(fFreq,pos) ) - 0.5 ) * amplitude;
         fFreq *= 1.7;
         amplitude *= amplitudeScale;
     }
@@ -292,29 +343,30 @@ __device__ float ComputeDensity(float3 currPos){
     float metabolDensity = GetMetabolDensity(distToCenter);
 	float density = 0.f;
 
-    density = saturate( 1.0*saturate(metabolDensity) + 1*pow(metabolDensity,0.5)*(GetRandomDensity(currPos + 0.5, 0.15, 4, 0.7 )) );
-
+    density = saturate( 1.0*saturate(metabolDensity) + 1*pow(metabolDensity,0.5)*(GetRandomDensity(currPos + make_float3(0.5,0.5,0.5) , 0.15, 4, 0.7 )) );
 	return density;
 }
 
-__device__ float2 PreComputeOpticalDepth(){
+__device__ float2 PreComputeOpticalDepth(float3 normalizedStartPos, float3 rayDir){
     // This shader computes level 0 of the maximum density mip map
 
-    float3 normalizedStartPos, rayDir;
+    //float3 normalizedStartPos, rayDir;
     //OpticalDepthLUTCoordsToWorldParams( float4(ProjToUV(In.m_f2PosPS), g_GlobalCloudAttribs.f4Parameter.xy), normalizedStartPos, rayDir );
     
     // Intersect the view ray with the unit sphere:
     float2 rayIsecs;
     // normalizedStartPos  is located exactly on the surface; slightly move start pos inside the sphere
     // to avoid precision issues
-    GetRaySphereIntersection(normalizedStartPos + rayDir*1e-4, rayDir, 0, 1.f, rayIsecs);
+    float3 vec = normalizedStartPos + prod(1e-4,rayDir);
+    float  radius = 1.0f;
+    GetRaySphereIntersection(vec, rayDir, make_float3(0,0,0), radius, rayIsecs);
     
     if( rayIsecs.x > rayIsecs.y )
-        return 0;
+        return make_float2(0,0);
     
     float  numSteps = NUM_INTEGRATION_STEPS;
     float3 endPos = normalizedStartPos + rayDir * rayIsecs.y;
-    float3 f3Step = (endPos - normalizedStartPos) / numSteps;
+    float3 f3Step = frac(endPos - normalizedStartPos,numSteps);
 
     float totalDensity = 0;
     for(float fStepNum=0.5; fStepNum < numSteps; ++fStepNum){
@@ -322,7 +374,7 @@ __device__ float2 PreComputeOpticalDepth(){
         float density = ComputeDensity(f3CurrPos);
         totalDensity += density;
     }
-    return totalDensity / numSteps;
+    return make_float2(totalDensity/numSteps,totalDensity/numSteps);
 }
 
 
