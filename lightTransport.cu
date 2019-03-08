@@ -349,7 +349,6 @@ __device__ float ComputeDensity(float3 currPos){
 }
 
 __device__ float PreComputeOpticalDepth(float3 normalizedStartPos, float3 rayDir){
-    // This shader computes level 0 of the maximum density mip map
 
     // Intersect the view ray with the unit sphere:
     float2 rayIsecs;
